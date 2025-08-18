@@ -1,5 +1,5 @@
 import streamlit as st
-st.set_page_config(page_title="Numbers3予測AI", layout="wide")  # 必ず最上部！
+st.set_page_config(page_title="Loto7予測AI", layout="wide")  # 必ず最上部！
 import pandas as pd
 import os
 from datetime import datetime, time
