@@ -851,7 +851,7 @@ class LotoPredictor:
         except Exception as e:
             print(f"[STACK] メタ学習失敗: {e}")
 
-self.ppo_model.save(os.path.join(model_dir, "ppo_model.zip"))
+        self.ppo_model.save(os.path.join(model_dir, "ppo_model.zip"))
 
         print("[INFO] 全モデルの訓練と保存が完了しました")
 
