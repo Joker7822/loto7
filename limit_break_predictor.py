@@ -545,37 +545,72 @@ if __name__ == "__main__":
 
 
 # =============================================================
-# 🔧 追加機能: 欠損予測補完処理
+# 🔧 追加機能: 欠損回の一括予測（上書きではなく追記保存）
 # =============================================================
-def fill_missing_predictions(self, full_data: pd.DataFrame, save_path="self_predictions.csv"):
-    """
-    過去1回目からの抽せん日で、予測結果が保存されていない回を自動で予測して埋める
-    """
-    try:
-        from lottery_prediction import load_self_predictions, save_predictions_to_csv
-    except Exception:
-        print("[WARN] lottery_prediction の補助関数をインポートできませんでした")
-        return
+def _make_prediction_row(preds, drawing_date: str):
+    row = {"抽せん日": drawing_date}
+    for i, (nums, conf) in enumerate(preds[:5], 1):
+        row[f"予測{i}"] = ", ".join(map(str, nums))
+        row[f"信頼度{i}"] = round(float(conf), 3)
+    return row
 
-    # 既存の予測データをロード
-    existing_dates = set()
-    if save_path and os.path.exists(save_path):
+def _append_predictions_row(filename: str, row: dict):
+    # 既存があれば読み取り→行を追加→抽せん日で重複排除→日付昇順で保存
+    df_new = pd.DataFrame([row])
+    if os.path.exists(filename):
         try:
-            df_existing = pd.read_csv(save_path)
-            if "抽せん日" in df_existing.columns:
-                existing_dates = set(pd.to_datetime(df_existing["抽せん日"], errors="coerce").dropna())
-        except Exception as e:
-            print(f"[WARN] 既存予測の読み込みに失敗: {e}")
+            df_old = pd.read_csv(filename, encoding="utf-8-sig")
+        except Exception:
+            df_old = pd.read_csv(filename)
+        # 列の取り揃え
+        cols = list(dict.fromkeys(df_old.columns.tolist() + df_new.columns.tolist()))
+        df_old = df_old.reindex(columns=cols)
+        df_new = df_new.reindex(columns=cols)
+        df = pd.concat([df_old, df_new], ignore_index=True)
+        # 抽せん日を正規化・重複排除
+        if "抽せん日" in df.columns:
+            df["抽せん日"] = pd.to_datetime(df["抽せん日"], errors="coerce")
+            df = df.drop_duplicates(subset=["抽せん日"], keep="first").sort_values("抽せん日")
+            df["抽せん日"] = df["抽せん日"].dt.strftime("%Y-%m-%d")
+        df.to_csv(filename, index=False, encoding="utf-8-sig")
+    else:
+        df_new.to_csv(filename, index=False, encoding="utf-8-sig")
 
-    # 抽せん日一覧
-    all_dates = pd.to_datetime(full_data["抽せん日"], errors="coerce").dropna().unique()
-    missing_dates = [d for d in all_dates if d not in existing_dates]
+def backfill_predictions(self, full_data: pd.DataFrame, out_csv: str = "loto7_predictions.csv", n_out: int = 50):
+    \"\"\"
+    過去1回目から直近まで、まだ保存されていない回の予測を順次作成して追記保存する。
+    - latest_data の各日付 d について、d 以前の履歴だけで予測し、その日の行を out_csv に追記。
+    - 既に out_csv に存在する日付はスキップ。
+    - save_predictions_to_csv の「毎回上書き」問題を回避するため、ここで追記保存を完結。
+    \"\"\"
+    # データの日付を正規化
+    df = full_data.copy()
+    df["抽せん日"] = pd.to_datetime(df["抽せん日"], errors="coerce")
+    df = df.dropna(subset=["抽せん日"]).sort_values("抽せん日")
 
-    for d in sorted(missing_dates):
-        target_df = full_data[full_data["抽せん日"] <= d]
-        preds = self.limit_break_predict(target_df, n_out=50)
-        save_predictions_to_csv(preds, drawing_date=str(d.date()), filename=save_path)
-        print(f"[INFO] 欠損予測を補完しました → {d.date()}")
+    # 既存保存のある日付を収集
+    existing_dates = set()
+    if os.path.exists(out_csv):
+        try:
+            ex = pd.read_csv(out_csv, encoding="utf-8-sig")
+        except Exception:
+            ex = pd.read_csv(out_csv)
+        if "抽せん日" in ex.columns:
+            existing_dates = set(pd.to_datetime(ex["抽せん日"], errors="coerce").dropna().dt.date)
 
-# クラスにメソッドを動的に追加
-setattr(LimitBreakPredictor, "fill_missing_predictions", fill_missing_predictions)
+    # すべての対象日
+    all_dates = [d.date() for d in df["抽せん日"].unique()]
+
+    # 未保存のみループ
+    for d in all_dates:
+        if d in existing_dates:
+            continue
+        # d 当日の予測を、d 以前のみを使って生成
+        subset = df[df["抽せん日"] <= pd.Timestamp(d)]
+        preds = self.limit_break_predict(subset, n_out=n_out)
+        row = _make_prediction_row(preds, drawing_date=str(d))
+        _append_predictions_row(out_csv, row)
+        print(f"[INFO] 予測を追記: {d}")
+
+# クラスにメソッドをアタッチ
+setattr(LimitBreakPredictor, "backfill_predictions", backfill_predictions)
