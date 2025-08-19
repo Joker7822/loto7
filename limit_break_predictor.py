@@ -536,9 +536,9 @@ if __name__ == "__main__":
 
     preds = lbp.limit_break_predict(data.tail(50), n_out=50)
     date = get_latest_drawing_date()
-    ("=== 限界突破 予測（上位5件） ===")
-    for i, (nums, conf) in enumerate(preds[:5], 1):
-        print(f"#{i}: {nums}  信頼度={conf:.3f}")
+    print("\n=== 限界突破予想 上位5件 ===")
+    for seq, sc in preds[:5]:
+        print(seq, "score:", round(sc, 4))
 
     lbp.save_predictions(preds, draw_date)
     print("[DONE] 予測を CSV に保存しました → loto7_predictions.csv")
