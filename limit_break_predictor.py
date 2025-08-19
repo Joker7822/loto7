@@ -330,65 +330,64 @@ class EvolutionEngine:
         order = np.argsort(final_scores)[::-1]
         return [pop[i] for i in order]
 
-        self,
-        seed_population: List[NumberSet],
-        hist_df: pd.DataFrame,
-        generations: int = 40,
-        pop_size: int = 120,
-        elite: int = 12,
-    ) -> List[NumberSet]:
-        set_global_seed(777)
-        num_freq = number_frequencies(hist_df)
-        pair_freq, triple_freq = pair_triple_frequencies(hist_df)
+    self,
+    seed_population: List[NumberSet],
+    hist_df: pd.DataFrame,
+    generations: int = 40,
+    pop_size: int = 120,
+    elite: int = 12,
+) -> List[NumberSet]:
+    set_global_seed(777)
+    num_freq = number_frequencies(hist_df)
+    pair_freq, triple_freq = pair_triple_frequencies(hist_df)
 
-        # 初期集団（不足は頻度ガイドのランダムで補う）
-        pop: List[NumberSet] = []
-        pop.extend(_ensure_valid(s) for s in seed_population)
-        while len(pop) < pop_size:
-            # 頻度分布に従ったサンプリング
-            pool = list(range(self.low, self.high + 1))
-            weights = np.array([num_freq.get(i, 1e-6) for i in pool], dtype=float)
-            weights = weights / (weights.sum() or 1)
-            cand = list(np.random.choice(pool, size=7, replace=False, p=weights))
-            pop.append(_ensure_valid(cand, self.low, self.high))
+    # 初期集団（不足は頻度ガイドのランダムで補う）
+    pop: List[NumberSet] = []
+    pop.extend(_ensure_valid(s, self.low, self.high) for s in seed_population)
+    while len(pop) < pop_size:
+        # 頻度分布に従ったサンプリング
+        pool = list(range(self.low, self.high + 1))
+        weights = np.array([num_freq.get(i, 1e-6) for i in pool], dtype=float)
+        weights = weights / (weights.sum() or 1)
+        cand = list(np.random.choice(pool, size=7, replace=False, p=weights))
+        pop.append(_ensure_valid(cand, self.low, self.high))
 
-        for _gen in range(generations):
-            # 評価
-            scores = [
-                self._fitness(ind, hist_df, pair_freq, triple_freq, others=pop)
-                for ind in pop
-            ]
-            # エリート保存
-            idxs = np.argsort(scores)[::-1]
-            elites = [pop[i] for i in idxs[:elite]]
-
-            # 親選択（トーナメント）
-            parents: List[NumberSet] = []
-            while len(parents) < pop_size - elite:
-                t = random.sample(range(pop_size), k=4)
-                best = max(t, key=lambda i: scores[i])
-                parents.append(pop[best])
-
-            # 交叉＋突然変異
-            children: List[NumberSet] = []
-            for i in range(0, len(parents), 2):
-                a = parents[i]
-                b = parents[(i + 1) % len(parents)]
-                child = self._crossover(a, b)
-                if random.random() < 0.9:
-                    child = self._mutate(child, num_freq)
-                children.append(child)
-
-            pop = elites + children
-
-        # 最終スコアでソート
-        final_scores = [
-            self._fitness(ind, hist_df, pair_freq, triple_freq, others=[])
+    for _gen in range(generations):
+        # 評価
+        scores = [
+            self._fitness(ind, hist_df, pair_freq, triple_freq, others=pop)
             for ind in pop
         ]
-        order = np.argsort(final_scores)[::-1]
-        return [pop[i] for i in order]
+        # エリート保存
+        idxs = np.argsort(scores)[::-1]
+        elites = [pop[i] for i in idxs[:elite]]
 
+        # 親選択（トーナメント）
+        parents: List[NumberSet] = []
+        while len(parents) < pop_size - elite:
+            t = random.sample(range(pop_size), k=4)
+            best = max(t, key=lambda i: scores[i])
+            parents.append(pop[best])
+
+        # 交叉＋突然変異
+        children: List[NumberSet] = []
+        for i in range(0, len(parents), 2):
+            a = parents[i]
+            b = parents[(i + 1) % len(parents)]
+            child = self._crossover(a, b)
+            if random.random() < 0.9:
+                child = self._mutate(child, num_freq)
+            children.append(_ensure_valid(child, self.low, self.high))
+
+        pop = elites + children
+
+    # 最終スコアでソート
+    final_scores = [
+        self._fitness(ind, hist_df, pair_freq, triple_freq, others=[])
+        for ind in pop
+    ]
+    order = np.argsort(final_scores)[::-1]
+    return [pop[i] for i in order]
 
 # ——————————————————————————————————————————————
 # 擬似・条件付きサンプラー（Diffusion/GAN があれば活用、なければ確率サンプル）
