@@ -254,6 +254,89 @@ class EvolutionEngine:
         pop_size: int = 120,
         elite: int = 12,
     ) -> List[NumberSet]:
+        """GA 検索。各世代で母集団サイズを一定に保つよう修正。トーナメントは現在の個体数に基づく。"""
+        set_global_seed(777)
+        elite = max(1, min(elite, pop_size - 1))
+        num_freq = number_frequencies(hist_df)
+        pair_freq, triple_freq = pair_triple_frequencies(hist_df)
+
+        # 初期集団（不足は頻度ガイドのランダムで補う）
+        pop: List[NumberSet] = []
+        pop.extend(_ensure_valid(s) for s in seed_population)
+        while len(pop) < pop_size:
+            pool = list(range(self.low, self.high + 1))
+            weights = np.array([num_freq.get(i, 1e-6) for i in pool], dtype=float)
+            weights = weights / (weights.sum() or 1)
+            cand = list(np.random.choice(pool, size=7, replace=False, p=weights))
+            pop.append(_ensure_valid(cand, self.low, self.high))
+        # 余剰があれば切り詰め
+        if len(pop) > pop_size:
+            pop = pop[:pop_size]
+
+        for _gen in range(generations):
+            N = len(pop)
+            # 評価
+            scores = [self._fitness(ind, hist_df, pair_freq, triple_freq, others=pop) for ind in pop]
+
+            # エリート選択
+            idxs = np.argsort(scores)[::-1]
+            elites = [pop[i] for i in idxs[:elite]]
+
+            # 親選択（現在の個体数 N ベース）
+            parents: List[NumberSet] = []
+            target_children = pop_size - elite
+            if N < 4:
+                # 個体が少ない場合はランダム選択にフォールバック
+                while len(parents) < target_children:
+                    parents.append(random.choice(pop))
+                    parents.append(random.choice(pop))
+            else:
+                while len(parents) < target_children:
+                    t = random.sample(range(N), k=4)
+                    best = max(t, key=lambda i: scores[i])
+                    parents.append(pop[best])
+                    # 2体目も選んで交叉の多様性を確保
+                    t2 = random.sample(range(N), k=4)
+                    best2 = max(t2, key=lambda i: scores[i])
+                    parents.append(pop[best2])
+
+            # 交叉＋突然変異で target_children 件の子を作る
+            children: List[NumberSet] = []
+            i = 0
+            while len(children) < target_children:
+                a = parents[i % len(parents)]
+                b = parents[(i + 1) % len(parents)]
+                child = self._crossover(a, b)
+                if random.random() < 0.9:
+                    child = self._mutate(child, num_freq)
+                children.append(child)
+                i += 2
+
+            pop = elites + children
+            # 念のためサイズを固定
+            if len(pop) > pop_size:
+                pop = pop[:pop_size]
+            elif len(pop) < pop_size:
+                # ランダム補充
+                while len(pop) < pop_size:
+                    pool = list(range(self.low, self.high + 1))
+                    weights = np.array([num_freq.get(i, 1e-6) for i in pool], dtype=float)
+                    weights = weights / (weights.sum() or 1)
+                    cand = list(np.random.choice(pool, size=7, replace=False, p=weights))
+                    pop.append(_ensure_valid(cand, self.low, self.high))
+
+        # 最終スコアでソート
+        final_scores = [self._fitness(ind, hist_df, pair_freq, triple_freq, others=[]) for ind in pop]
+        order = np.argsort(final_scores)[::-1]
+        return [pop[i] for i in order]
+
+        self,
+        seed_population: List[NumberSet],
+        hist_df: pd.DataFrame,
+        generations: int = 40,
+        pop_size: int = 120,
+        elite: int = 12,
+    ) -> List[NumberSet]:
         set_global_seed(777)
         num_freq = number_frequencies(hist_df)
         pair_freq, triple_freq = pair_triple_frequencies(hist_df)
