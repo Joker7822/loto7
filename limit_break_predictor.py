@@ -542,3 +542,40 @@ if __name__ == "__main__":
 
     lbp.save_predictions(preds, draw_date)
     print("[DONE] 予測を CSV に保存しました → loto7_predictions.csv")
+
+
+# =============================================================
+# 🔧 追加機能: 欠損予測補完処理
+# =============================================================
+def fill_missing_predictions(self, full_data: pd.DataFrame, save_path="self_predictions.csv"):
+    """
+    過去1回目からの抽せん日で、予測結果が保存されていない回を自動で予測して埋める
+    """
+    try:
+        from lottery_prediction import load_self_predictions, save_predictions_to_csv
+    except Exception:
+        print("[WARN] lottery_prediction の補助関数をインポートできませんでした")
+        return
+
+    # 既存の予測データをロード
+    existing_dates = set()
+    if save_path and os.path.exists(save_path):
+        try:
+            df_existing = pd.read_csv(save_path)
+            if "抽せん日" in df_existing.columns:
+                existing_dates = set(pd.to_datetime(df_existing["抽せん日"], errors="coerce").dropna())
+        except Exception as e:
+            print(f"[WARN] 既存予測の読み込みに失敗: {e}")
+
+    # 抽せん日一覧
+    all_dates = pd.to_datetime(full_data["抽せん日"], errors="coerce").dropna().unique()
+    missing_dates = [d for d in all_dates if d not in existing_dates]
+
+    for d in sorted(missing_dates):
+        target_df = full_data[full_data["抽せん日"] <= d]
+        preds = self.limit_break_predict(target_df, n_out=50)
+        save_predictions_to_csv(preds, drawing_date=str(d.date()), filename=save_path)
+        print(f"[INFO] 欠損予測を補完しました → {d.date()}")
+
+# クラスにメソッドを動的に追加
+setattr(LimitBreakPredictor, "fill_missing_predictions", fill_missing_predictions)
