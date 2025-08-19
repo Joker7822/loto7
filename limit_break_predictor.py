@@ -38,6 +38,7 @@ try:
         create_advanced_features,
         save_predictions_to_csv,
         set_global_seed,
+        get_latest_drawing_dates,
     )
 except Exception:
     LotoPredictor = object  # type: ignore
@@ -330,64 +331,6 @@ class EvolutionEngine:
         order = np.argsort(final_scores)[::-1]
         return [pop[i] for i in order]
 
-    self,
-    seed_population: List[NumberSet],
-    hist_df: pd.DataFrame,
-    generations: int = 40,
-    pop_size: int = 120,
-    elite: int = 12,
-) -> List[NumberSet]:
-    set_global_seed(777)
-    num_freq = number_frequencies(hist_df)
-    pair_freq, triple_freq = pair_triple_frequencies(hist_df)
-
-    # 初期集団（不足は頻度ガイドのランダムで補う）
-    pop: List[NumberSet] = []
-    pop.extend(_ensure_valid(s, self.low, self.high) for s in seed_population)
-    while len(pop) < pop_size:
-        # 頻度分布に従ったサンプリング
-        pool = list(range(self.low, self.high + 1))
-        weights = np.array([num_freq.get(i, 1e-6) for i in pool], dtype=float)
-        weights = weights / (weights.sum() or 1)
-        cand = list(np.random.choice(pool, size=7, replace=False, p=weights))
-        pop.append(_ensure_valid(cand, self.low, self.high))
-
-    for _gen in range(generations):
-        # 評価
-        scores = [
-            self._fitness(ind, hist_df, pair_freq, triple_freq, others=pop)
-            for ind in pop
-        ]
-        # エリート保存
-        idxs = np.argsort(scores)[::-1]
-        elites = [pop[i] for i in idxs[:elite]]
-
-        # 親選択（トーナメント）
-        parents: List[NumberSet] = []
-        while len(parents) < pop_size - elite:
-            t = random.sample(range(pop_size), k=4)
-            best = max(t, key=lambda i: scores[i])
-            parents.append(pop[best])
-
-        # 交叉＋突然変異
-        children: List[NumberSet] = []
-        for i in range(0, len(parents), 2):
-            a = parents[i]
-            b = parents[(i + 1) % len(parents)]
-            child = self._crossover(a, b)
-            if random.random() < 0.9:
-                child = self._mutate(child, num_freq)
-            children.append(_ensure_valid(child, self.low, self.high))
-
-        pop = elites + children
-
-    # 最終スコアでソート
-    final_scores = [
-        self._fitness(ind, hist_df, pair_freq, triple_freq, others=[])
-        for ind in pop
-    ]
-    order = np.argsort(final_scores)[::-1]
-    return [pop[i] for i in order]
 
 # ——————————————————————————————————————————————
 # 擬似・条件付きサンプラー（Diffusion/GAN があれば活用、なければ確率サンプル）
@@ -410,11 +353,9 @@ class ConditionalSampler:
         weights = weights / (weights.sum() or 1)
 
         # 1) Diffusion 生成が使えるならそれを優先
-        used_diffusion = False
         if base_predictor is not None and getattr(base_predictor, "diffusion_model", None) is not None:
             try:
                 from diffusion_module import sample_diffusion_ddpm
-                used_diffusion = True
                 trials = 0
                 while len(out) < n_samples and trials < n_samples * 10:
                     trials += 1
@@ -431,7 +372,7 @@ class ConditionalSampler:
                     if constraint_score(nums, self.cfg) >= accept_threshold:
                         out.append(nums)
             except Exception:
-                used_diffusion = False
+                pass
 
         # 2) Diffusion が使えない／足りない場合は確率サンプル
         while len(out) < n_samples:
@@ -574,7 +515,6 @@ if __name__ == "__main__":
     # 公式サイトから抽せん日を取れる環境なら使用（失敗時はフォールバック）
     draw_date = None
     try:
-        from lottery_prediction import get_latest_drawing_dates  # 非同期
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         dates = loop.run_until_complete(get_latest_drawing_dates())
@@ -590,7 +530,8 @@ if __name__ == "__main__":
     lbp = LimitBreakPredictor()
     preds = lbp.limit_break_predict(data.tail(50), n_out=50)
 
-    print("\n=== 限界突破 予測（上位5件） ===")
+    print("
+=== 限界突破 予測（上位5件） ===")
     for i, (nums, conf) in enumerate(preds[:5], 1):
         print(f"#{i}: {nums}  信頼度={conf:.3f}")
 
