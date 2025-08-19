@@ -528,9 +528,14 @@ if __name__ == "__main__":
     print(f"[INFO] 予測対象抽せん日: {draw_date}")
 
     lbp = LimitBreakPredictor()
-    preds = lbp.limit_break_predict(data.tail(50), n_out=50)
+    try:
+        data = pd.read_csv("loto7.csv")
+    except FileNotFoundError:
+        print("loto7.csv が見つかりません。CSV を配置してください。")
+        exit(1)
 
-    print("
+    preds = lbp.limit_break_predict(data.tail(50), n_out=50)
+    date = get_latest_drawing_date()
 === 限界突破 予測（上位5件） ===")
     for i, (nums, conf) in enumerate(preds[:5], 1):
         print(f"#{i}: {nums}  信頼度={conf:.3f}")
