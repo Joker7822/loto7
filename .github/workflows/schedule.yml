@@ -73,7 +73,7 @@ jobs:
           fi
 
       - name: Run predictor script
-        run: xvfb-run -a python test_with_gnn.py
+        run: xvfb-run -a python limit_break_predictor.py
 
       - name: Commit and push prediction results if changed
         env:
