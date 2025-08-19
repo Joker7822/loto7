@@ -268,7 +268,7 @@ class EvolutionEngine:
             pool = list(range(self.low, self.high + 1))
             weights = np.array([num_freq.get(i, 1e-6) for i in pool], dtype=float)
             weights = weights / (weights.sum() or 1)
-            cand = list(np.random.choice(pool, size=7, replace=False, p=weights))
+            cand = list(np.random.choice(pool, size=7, replace=False, p=weights)) if weights is not None else list(np.random.choice(pool, size=7, replace=False))
             pop.append(_ensure_valid(cand, self.low, self.high))
         # 余剰があれば切り詰め
         if len(pop) > pop_size:
@@ -323,7 +323,7 @@ class EvolutionEngine:
                     pool = list(range(self.low, self.high + 1))
                     weights = np.array([num_freq.get(i, 1e-6) for i in pool], dtype=float)
                     weights = weights / (weights.sum() or 1)
-                    cand = list(np.random.choice(pool, size=7, replace=False, p=weights))
+                    cand = list(np.random.choice(pool, size=7, replace=False, p=weights)) if weights is not None else list(np.random.choice(pool, size=7, replace=False))
                     pop.append(_ensure_valid(cand, self.low, self.high))
 
         # 最終スコアでソート
@@ -350,7 +350,13 @@ class ConditionalSampler:
         freq = number_frequencies(hist_df)
         pool = np.arange(self.cfg.low, self.cfg.high + 1)
         weights = np.array([freq.get(int(i), 1e-6) for i in pool], dtype=float)
-        weights = weights / (weights.sum() or 1)
+        # 数値安定化：負値/NaN/Inf除去 → 正規化失敗時は一様分布
+        weights = np.where(np.isfinite(weights) & (weights > 0), weights, 0.0)
+        s = weights.sum()
+        if not np.isfinite(s) or s <= 0:
+            weights = None  # → np.random.choice 側で一様分布
+        else:
+            weights = weights / s
 
         # 1) Diffusion 生成が使えるならそれを優先
         if base_predictor is not None and getattr(base_predictor, "diffusion_model", None) is not None:
@@ -376,7 +382,7 @@ class ConditionalSampler:
 
         # 2) Diffusion が使えない／足りない場合は確率サンプル
         while len(out) < n_samples:
-            cand = list(np.random.choice(pool, size=7, replace=False, p=weights))
+            cand = list(np.random.choice(pool, size=7, replace=False, p=weights)) if weights is not None else list(np.random.choice(pool, size=7, replace=False))
             cand = _ensure_valid(cand, self.cfg.low, self.cfg.high)
             if constraint_score(cand, self.cfg) >= accept_threshold:
                 out.append(cand)
@@ -528,17 +534,11 @@ if __name__ == "__main__":
     print(f"[INFO] 予測対象抽せん日: {draw_date}")
 
     lbp = LimitBreakPredictor()
-    try:
-        data = pd.read_csv("loto7.csv")
-    except FileNotFoundError:
-        print("loto7.csv が見つかりません。CSV を配置してください。")
-        exit(1)
-
     preds = lbp.limit_break_predict(data.tail(50), n_out=50)
-    date = get_latest_drawing_date()
-    print("\n=== 限界突破予想 上位5件 ===")
-    for seq, sc in preds[:5]:
-        print(seq, "score:", round(sc, 4))
+
+    print("=== 限界突破 予測（上位5件） ===")
+    for i, (nums, conf) in enumerate(preds[:5], 1):
+        print(f"#{i}: {nums}  信頼度={conf:.3f}")
 
     lbp.save_predictions(preds, draw_date)
     print("[DONE] 予測を CSV に保存しました → loto7_predictions.csv")
