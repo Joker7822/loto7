@@ -577,13 +577,7 @@ def _append_predictions_row(filename: str, row: dict):
         df_new.to_csv(filename, index=False, encoding="utf-8-sig")
 
 def backfill_predictions(self, full_data: pd.DataFrame, out_csv: str = "loto7_predictions.csv", n_out: int = 50):
-    \"\"\"
-    過去1回目から直近まで、まだ保存されていない回の予測を順次作成して追記保存する。
-    - latest_data の各日付 d について、d 以前の履歴だけで予測し、その日の行を out_csv に追記。
-    - 既に out_csv に存在する日付はスキップ。
-    - save_predictions_to_csv の「毎回上書き」問題を回避するため、ここで追記保存を完結。
-    \"\"\"
-    # データの日付を正規化
+
     df = full_data.copy()
     df["抽せん日"] = pd.to_datetime(df["抽せん日"], errors="coerce")
     df = df.dropna(subset=["抽せん日"]).sort_values("抽せん日")
