@@ -608,3 +608,60 @@ def backfill_predictions(self, full_data: pd.DataFrame, out_csv: str = "loto7_pr
 
 # クラスにメソッドをアタッチ
 setattr(LimitBreakPredictor, "backfill_predictions", backfill_predictions)
+
+
+
+# =========================
+# Monkey patch: auto-save self predictions for LimitBreakPredictor
+# =========================
+try:
+    import numpy as _np
+except Exception:
+    _np = None
+
+def __lb_patched_limit_break_predict(self, latest_data, n_out=50, ga_generations=42, ga_pop_size=160, sampler_n=120):
+    results = __lb_orig_limit_break_predict(self, latest_data, n_out=n_out, ga_generations=ga_generations, ga_pop_size=ga_pop_size, sampler_n=sampler_n)
+    try:
+        from lottery_prediction import save_self_predictions as _save_self_predictions
+    except Exception:
+        _save_self_predictions = None
+    try:
+        if _save_self_predictions is not None and results:
+            rows = [((_np.array(nums) if _np is not None else nums), float(conf)) for nums, conf in results]
+            _save_self_predictions(rows, file_path="self_predictions.csv", max_records=100)
+    except Exception as e:
+        print(f"[PATCH] save_self_predictions in limit_break_predict failed: {e}")
+    return results
+
+def __lb_patched_save_predictions(self, predictions, drawing_date: str, filename: str = "loto7_predictions.csv"):
+    # call original save (summary CSV)
+    try:
+        __lb_orig_save_predictions(self, predictions, drawing_date, filename=filename)
+    except Exception as e:
+        print(f"[PATCH] original save_predictions failed: {e}")
+    # also persist to self_predictions.csv so training can reuse
+    try:
+        from lottery_prediction import save_self_predictions as _save_self_predictions
+    except Exception:
+        _save_self_predictions = None
+    try:
+        if _save_self_predictions is not None and predictions:
+            rows = [((_np.array(nums) if _np is not None else nums), float(conf)) for nums, conf in predictions]
+            _save_self_predictions(rows, file_path="self_predictions.csv", max_records=100)
+    except Exception as e:
+        print(f"[PATCH] save_self_predictions in save_predictions failed: {e}")
+
+# Only patch once
+if not globals().get("__lb_patched__", False):
+    try:
+        __lb_orig_limit_break_predict = LimitBreakPredictor.limit_break_predict
+        LimitBreakPredictor.limit_break_predict = __lb_patched_limit_break_predict
+    except Exception as e:
+        print(f"[PATCH] Failed to patch LimitBreakPredictor.limit_break_predict: {e}")
+    try:
+        __lb_orig_save_predictions = LimitBreakPredictor.save_predictions
+        LimitBreakPredictor.save_predictions = __lb_patched_save_predictions
+    except Exception as e:
+        print(f"[PATCH] Failed to patch LimitBreakPredictor.save_predictions: {e}")
+    __lb_patched__ = True
+    print("[PATCH] LimitBreakPredictor methods have been patched to auto-save self predictions.")
