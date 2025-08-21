@@ -207,17 +207,22 @@ def _cross(a: NumberSet, b: NumberSet, low: int, high: int) -> NumberSet:
 
 
 def _biased_sample_by_freq(hist_df: pd.DataFrame, k: int, low: int, high: int) -> NumberSet:
-    """出現頻度にバイアスした初期解生成"""
-    # 過去出現頻度
+    """出現頻度にバイアスした初期解生成（FutureWarning 対応版）"""
+    # 過去出現頻度を収集
     if "本数字" in hist_df.columns and isinstance(hist_df["本数字"].iloc[0], (list, tuple)):
         nums = hist_df["本数字"].explode().astype(int).to_list()
     else:
         cols = [c for c in hist_df.columns if c.startswith("n") and c[1:].isdigit()]
         nums = hist_df[cols].values.ravel().astype(int).tolist()
+
     vc = pd.Series(nums).value_counts()
     pool = list(range(low, high + 1))
-    weights = np.array([vc.get(i, 1) for i in pool], dtype=float)
+
+    # ラベルベースで weight を用意（pool に無い番号は 1 で埋める）
+    # ※ vc.get(i) の位置/ラベル曖昧さを避けるため reindex+fillna を使用
+    weights = vc.reindex(pool).fillna(1).to_numpy(dtype=float)
     weights = weights / weights.sum()
+
     chosen = np.random.choice(pool, size=k, replace=False, p=weights)
     return sorted(map(int, chosen.tolist()))
 
