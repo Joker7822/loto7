@@ -1,24 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-LimitBreakPredictor: 既存の LotoPredictor を強化し、
-- 進化的アルゴリズム（GA）
-- 条件付き（制約付き）サンプリング（擬似的条件付きDiffusion/確率的生成）
-- 多目的フィットネス（分布整合性・多様性・ルール適合度）
-を統合して "限界突破" した候補生成を行うモジュール。
-
-【使い方（単体実行）】
-$ python limit_break_predictor.py
-
-【使い方（既存コードと統合）】
-from limit_break_predictor import LimitBreakPredictor, ConstraintConfig
-lbp = LimitBreakPredictor()
-final_preds = lbp.limit_break_predict(latest_data_df, n_out=50)
-# CSV保存（次回の抽せん日を指定）
-lbp.save_predictions(final_preds, drawing_date_str)
-
-依存：lottery_prediction.py 内の LotoPredictor / 各種ユーティリティ（存在すれば自動で活用）
+LimitBreakPredictor（完全版サンプラー搭載）:
+- GA（進化探索）
+- 完全版 条件付きサンプリング（履歴ベースのエネルギー最小化：焼きなまし＋メトロポリス）
+- 多目的スコア（分布整合性・多様性・ルール適合度）
 """
+
 from __future__ import annotations
 
 import math
@@ -30,7 +18,7 @@ from typing import List, Tuple, Dict, Optional, Iterable
 import numpy as np
 import pandas as pd
 
-# 既存実装から拝借（存在しない場合は安全にフォールバック）
+# 既存実装（無ければフォールバック）
 try:
     from lottery_prediction import (
         LotoPredictor,
@@ -43,7 +31,6 @@ try:
 except Exception:
     LotoPredictor = object  # type: ignore
     def preprocess_data(df):
-        # 最低限のフォールバック
         nums = df["本数字"].apply(lambda x: [int(v) for v in x] if isinstance(x, (list, tuple)) else [])
         X = pd.DataFrame({"mean": nums.apply(np.mean), "std": nums.apply(np.std)}).fillna(0.0).values
         return X, None, None
@@ -63,17 +50,12 @@ except Exception:
 # ——————————————————————————————————————————————
 @dataclass
 class ConstraintConfig:
-    # 奇数の個数レンジ（例：2〜5）
     odd_min: int = 2
     odd_max: int = 5
-    # 合計値レンジ（例：100〜150）
     sum_min: int = 100
     sum_max: int = 150
-    # 最小間隔（隣り合う差）
     min_gap: int = 2
-    # 数字のレンジ（max - min がこの値以上）
     min_range: int = 15
-    # 1..37 の範囲強制
     low: int = 1
     high: int = 37
 
@@ -83,20 +65,16 @@ class ConstraintConfig:
 NumberSet = List[int]
 PredWithScore = Tuple[NumberSet, float]
 
-
 def _ensure_valid(numbers: Iterable[int], low: int = 1, high: int = 37) -> NumberSet:
     s = sorted(set(int(n) for n in numbers if low <= int(n) <= high))
-    # 足りなければランダム補完
     while len(s) < 7:
         c = random.randint(low, high)
         if c not in s:
             s.append(c)
     return sorted(s[:7])
 
-
 def _odd_count(nums: NumberSet) -> int:
     return sum(1 for n in nums if n % 2 != 0)
-
 
 def _min_gap(nums: NumberSet) -> int:
     nums = sorted(nums)
@@ -104,22 +82,17 @@ def _min_gap(nums: NumberSet) -> int:
         return 0
     return min(nums[i + 1] - nums[i] for i in range(len(nums) - 1))
 
-
 def _range(nums: NumberSet) -> int:
     return max(nums) - min(nums)
 
-
 def _within(v: float, lo: float, hi: float) -> float:
-    """範囲内なら1.0、逸脱に応じて0へ線形減衰（クランプ）。"""
     if lo <= v <= hi:
         return 1.0
     d = min(abs(v - lo), abs(v - hi))
     width = max(1e-6, hi - lo)
     return max(0.0, 1.0 - d / width)
 
-
 def constraint_score(nums: NumberSet, cfg: ConstraintConfig) -> float:
-    """0〜1（高いほど良い）"""
     oc = _odd_count(nums)
     total = sum(nums)
     mg = _min_gap(nums)
@@ -129,7 +102,6 @@ def constraint_score(nums: NumberSet, cfg: ConstraintConfig) -> float:
     s += 0.20 * _within(mg, cfg.min_gap, 37)
     s += 0.20 * _within(rg, cfg.min_range, 37)
     return float(s)
-
 
 def number_frequencies(historical_df: pd.DataFrame) -> Dict[int, float]:
     counts = {i: 0 for i in range(1, 38)}
@@ -143,7 +115,6 @@ def number_frequencies(historical_df: pd.DataFrame) -> Dict[int, float]:
     total = sum(counts.values()) or 1
     return {k: v / total for k, v in counts.items()}
 
-
 def pair_triple_frequencies(historical_df: pd.DataFrame) -> Tuple[Dict[Tuple[int, int], int], Dict[Tuple[int, int, int], int]]:
     pair_freq: Dict[Tuple[int, int], int] = {}
     triple_freq: Dict[Tuple[int, int, int], int] = {}
@@ -153,12 +124,10 @@ def pair_triple_frequencies(historical_df: pd.DataFrame) -> Tuple[Dict[Tuple[int
         if not isinstance(nums, (list, tuple)):
             continue
         s = sorted(int(x) for x in nums)
-        # ペア
         for i in range(len(s)):
             for j in range(i + 1, len(s)):
                 p = (s[i], s[j])
                 pair_freq[p] = pair_freq.get(p, 0) + 1
-        # トリプル
         for i in range(len(s)):
             for j in range(i + 1, len(s)):
                 for k in range(j + 1, len(s)):
@@ -166,10 +135,8 @@ def pair_triple_frequencies(historical_df: pd.DataFrame) -> Tuple[Dict[Tuple[int
                     triple_freq[t] = triple_freq.get(t, 0) + 1
     return pair_freq, triple_freq
 
-
 def cooccurrence_score(nums: NumberSet, pair_freq, triple_freq) -> float:
     s = sorted(nums)
-    # 正規化用に適当なスケール
     pf_sum = 0
     tf_sum = 0
     for i in range(7):
@@ -179,9 +146,7 @@ def cooccurrence_score(nums: NumberSet, pair_freq, triple_freq) -> float:
         for j in range(i + 1, 7):
             for k in range(j + 1, 7):
                 tf_sum += triple_freq.get((s[i], s[j], s[k]), 0)
-    # 対数圧縮して0〜1に押し込む（経験則）
     return float(1.0 - math.exp(-0.002 * (pf_sum + 0.5 * tf_sum)))
-
 
 def diversity_penalty(nums: NumberSet, others: List[NumberSet]) -> float:
     if not others:
@@ -191,9 +156,7 @@ def diversity_penalty(nums: NumberSet, others: List[NumberSet]) -> float:
     for o in others:
         inters.append(len(s & set(o)))
     avg_inter = sum(inters) / len(inters)
-    # 共通が多いほどペナルティ（0〜1に）
     return min(1.0, avg_inter / 7.0)
-
 
 # ——————————————————————————————————————————————
 # Evolutionary Search（GA）
@@ -204,23 +167,14 @@ class EvolutionEngine:
         self.low = num_low
         self.high = num_high
 
-    def _fitness(
-        self,
-        cand: NumberSet,
-        hist_df: pd.DataFrame,
-        pair_freq,
-        triple_freq,
-        others: Optional[List[NumberSet]] = None,
-    ) -> float:
+    def _fitness(self, cand: NumberSet, hist_df: pd.DataFrame, pair_freq, triple_freq, others: Optional[List[NumberSet]] = None) -> float:
         cscore = constraint_score(cand, self.cfg)
         co = cooccurrence_score(cand, pair_freq, triple_freq)
         div_pen = diversity_penalty(cand, others or [])
-        # 多目的：制約・共起性を最大化、類似度ペナルティを最小化
         score = 0.55 * cscore + 0.45 * co - 0.25 * div_pen
         return float(score)
 
     def _crossover(self, a: NumberSet, b: NumberSet) -> NumberSet:
-        # ランダムに一部を交叉（3〜4個をAから、残りをBから）
         k = random.randint(3, 4)
         part = set(random.sample(a, k))
         child = list(part)
@@ -236,7 +190,6 @@ class EvolutionEngine:
         m = random.randint(1, 2)
         for _ in range(m):
             idx = random.randrange(7)
-            # 頻度に比例してサンプル（探索の偏りを与える）
             pool = list(range(self.low, self.high + 1))
             weights = np.array([num_freq.get(i, 1e-6) for i in pool], dtype=float)
             if weights.sum() <= 0:
@@ -247,21 +200,12 @@ class EvolutionEngine:
             y[idx] = cand
         return _ensure_valid(y, self.low, self.high)
 
-    def search(
-        self,
-        seed_population: List[NumberSet],
-        hist_df: pd.DataFrame,
-        generations: int = 40,
-        pop_size: int = 120,
-        elite: int = 12,
-    ) -> List[NumberSet]:
-        """GA 検索。各世代で母集団サイズを一定に保つよう修正。トーナメントは現在の個体数に基づく。"""
+    def search(self, seed_population: List[NumberSet], hist_df: pd.DataFrame, generations: int = 40, pop_size: int = 120, elite: int = 12) -> List[NumberSet]:
         set_global_seed(777)
         elite = max(1, min(elite, pop_size - 1))
         num_freq = number_frequencies(hist_df)
         pair_freq, triple_freq = pair_triple_frequencies(hist_df)
 
-        # 初期集団（不足は頻度ガイドのランダムで補う）
         pop: List[NumberSet] = []
         pop.extend(_ensure_valid(s) for s in seed_population)
         while len(pop) < pop_size:
@@ -270,24 +214,19 @@ class EvolutionEngine:
             weights = weights / (weights.sum() or 1)
             cand = list(np.random.choice(pool, size=7, replace=False, p=weights)) if weights is not None else list(np.random.choice(pool, size=7, replace=False))
             pop.append(_ensure_valid(cand, self.low, self.high))
-        # 余剰があれば切り詰め
         if len(pop) > pop_size:
             pop = pop[:pop_size]
 
         for _gen in range(generations):
             N = len(pop)
-            # 評価
             scores = [self._fitness(ind, hist_df, pair_freq, triple_freq, others=pop) for ind in pop]
 
-            # エリート選択
             idxs = np.argsort(scores)[::-1]
             elites = [pop[i] for i in idxs[:elite]]
 
-            # 親選択（現在の個体数 N ベース）
             parents: List[NumberSet] = []
             target_children = pop_size - elite
             if N < 4:
-                # 個体が少ない場合はランダム選択にフォールバック
                 while len(parents) < target_children:
                     parents.append(random.choice(pop))
                     parents.append(random.choice(pop))
@@ -296,12 +235,10 @@ class EvolutionEngine:
                     t = random.sample(range(N), k=4)
                     best = max(t, key=lambda i: scores[i])
                     parents.append(pop[best])
-                    # 2体目も選んで交叉の多様性を確保
                     t2 = random.sample(range(N), k=4)
                     best2 = max(t2, key=lambda i: scores[i])
                     parents.append(pop[best2])
 
-            # 交叉＋突然変異で target_children 件の子を作る
             children: List[NumberSet] = []
             i = 0
             while len(children) < target_children:
@@ -314,11 +251,9 @@ class EvolutionEngine:
                 i += 2
 
             pop = elites + children
-            # 念のためサイズを固定
             if len(pop) > pop_size:
                 pop = pop[:pop_size]
             elif len(pop) < pop_size:
-                # ランダム補充
                 while len(pop) < pop_size:
                     pool = list(range(self.low, self.high + 1))
                     weights = np.array([num_freq.get(i, 1e-6) for i in pool], dtype=float)
@@ -326,18 +261,105 @@ class EvolutionEngine:
                     cand = list(np.random.choice(pool, size=7, replace=False, p=weights)) if weights is not None else list(np.random.choice(pool, size=7, replace=False))
                     pop.append(_ensure_valid(cand, self.low, self.high))
 
-        # 最終スコアでソート
         final_scores = [self._fitness(ind, hist_df, pair_freq, triple_freq, others=[]) for ind in pop]
         order = np.argsort(final_scores)[::-1]
         return [pop[i] for i in order]
 
-
 # ——————————————————————————————————————————————
-# 擬似・条件付きサンプラー（Diffusion/GAN があれば活用、なければ確率サンプル）
+# 完全版 条件付きサンプラー（焼きなまし＋メトロポリス）
 # ——————————————————————————————————————————————
 class ConditionalSampler:
-    def __init__(self, cfg: ConstraintConfig):
+    """
+    履歴から単体/ペア/トリプルの共起構造を抽出し、制約と統合したエネルギーを最小化する
+    サンプラー。学習や外部モデル不要。
+    """
+    def __init__(self, cfg: ConstraintConfig,
+                 alpha: float = 0.60,   # 制約適合の重み
+                 beta: float = 0.30,    # ペア/トリプル共起の重み
+                 gamma: float = 0.10,   # 単体頻度の重み
+                 ):
         self.cfg = cfg
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
+        self.freq_uni: Dict[int, float] = {}
+        self.freq_pair: Dict[Tuple[int, int], int] = {}
+        self.freq_tri: Dict[Tuple[int, int, int], int] = {}
+
+    # ——— エネルギー（小さいほど良い） ———
+    def _energy(self, nums: NumberSet) -> float:
+        # 1) 制約→スコア[0..1]を「良いほど低エネ」に変換
+        cons = constraint_score(nums, self.cfg)     # 0..1
+        e_cons = 1.0 - cons                        # 0..1
+
+        # 2) 共起：ペア/トリプル頻度を log 圧縮→平均正規化→良いほど低エネ
+        s = sorted(nums)
+        pf = 0.0; tf = 0.0; cntp = 0; cntt = 0
+        for i in range(7):
+            for j in range(i + 1, 7):
+                pf += math.log1p(self.freq_pair.get((s[i], s[j]), 0))
+                cntp += 1
+        for i in range(7):
+            for j in range(i + 1, 7):
+                for k in range(j + 1, 7):
+                    tf += math.log1p(self.freq_tri.get((s[i], s[j], s[k]), 0))
+                    cntt += 1
+        if cntp > 0:
+            pf /= cntp
+        if cntt > 0:
+            tf /= cntt
+        co_norm = 1.0 - math.exp(-(pf + 0.6 * tf))   # 0..1 に押し込み
+        e_co = 1.0 - co_norm
+
+        # 3) 単体頻度：出現確率の合計（平均）を使う
+        fu = np.mean([self.freq_uni.get(int(x), 1e-9) for x in s])
+        # スケール：0..1 に仮正規化（十分に小さい確率があるので安全に）
+        fu_norm = min(1.0, max(0.0, fu * 50.0))
+        e_uni = 1.0 - fu_norm
+
+        # 合成エネルギー
+        E = self.alpha * e_cons + self.beta * e_co + self.gamma * e_uni
+        return float(E)
+
+    # ——— 近傍提案（入替/置換/微移動） ———
+    def _propose(self, nums: NumberSet) -> NumberSet:
+        s = set(nums)
+        mode = random.random()
+        if mode < 0.34:
+            # 置換：1つ抜いて未使用から1つ入れる
+            victim = random.choice(nums)
+            pool = [x for x in range(self.cfg.low, self.cfg.high + 1) if x not in s or x == victim]
+            cand = random.choice(pool)
+            t = nums[:]
+            t[t.index(victim)] = cand
+            return _ensure_valid(t, self.cfg.low, self.cfg.high)
+        elif mode < 0.67:
+            # 入替：位置2つをスワップ（順序に意味はないが、局所探索で揺らす）
+            i, j = random.sample(range(7), 2)
+            t = nums[:]
+            t[i], t[j] = t[j], t[i]
+            return _ensure_valid(t, self.cfg.low, self.cfg.high)
+        else:
+            # 微移動：1つ選んで ±1〜±3 の範囲で動かす
+            i = random.randrange(7)
+            step = random.choice([-3, -2, -1, 1, 2, 3])
+            val = nums[i] + step
+            val = min(self.cfg.high, max(self.cfg.low, val))
+            t = nums[:]
+            t[i] = val
+            return _ensure_valid(t, self.cfg.low, self.cfg.high)
+
+    # ——— 初期解の生成：頻度ガイド＋制約フィルタ ———
+    def _init_candidate(self) -> NumberSet:
+        pool = list(range(self.cfg.low, self.cfg.high + 1))
+        w = np.array([self.freq_uni.get(i, 1e-9) for i in pool], dtype=float)
+        if not np.isfinite(w.sum()) or w.sum() <= 0:
+            cand = random.sample(pool, 7)
+        else:
+            w = w / w.sum()
+            cand = list(np.random.choice(pool, size=7, replace=False, p=w))
+        cand = _ensure_valid(cand, self.cfg.low, self.cfg.high)
+        return cand
 
     def sample_with_constraints(
         self,
@@ -345,49 +367,52 @@ class ConditionalSampler:
         hist_df: pd.DataFrame,
         n_samples: int = 100,
         accept_threshold: float = 0.75,
+        max_steps: int = 1200,
+        T_start: float = 1.2,
+        T_end: float = 0.02,
     ) -> List[NumberSet]:
+        # 周波数テーブル
+        self.freq_uni = number_frequencies(hist_df)
+        self.freq_pair, self.freq_tri = pair_triple_frequencies(hist_df)
+
         out: List[NumberSet] = []
-        freq = number_frequencies(hist_df)
-        pool = np.arange(self.cfg.low, self.cfg.high + 1)
-        weights = np.array([freq.get(int(i), 1e-6) for i in pool], dtype=float)
-        # 数値安定化：負値/NaN/Inf除去 → 正規化失敗時は一様分布
-        weights = np.where(np.isfinite(weights) & (weights > 0), weights, 0.0)
-        s = weights.sum()
-        if not np.isfinite(s) or s <= 0:
-            weights = None  # → np.random.choice 側で一様分布
-        else:
-            weights = weights / s
+        seen: set[Tuple[int, ...]] = set()
 
-        # 1) Diffusion 生成が使えるならそれを優先
-        if base_predictor is not None and getattr(base_predictor, "diffusion_model", None) is not None:
-            try:
-                from diffusion_module import sample_diffusion_ddpm
-                trials = 0
-                while len(out) < n_samples and trials < n_samples * 10:
-                    trials += 1
-                    x = sample_diffusion_ddpm(
-                        base_predictor.diffusion_model,
-                        getattr(base_predictor, "diffusion_betas", None),
-                        getattr(base_predictor, "diffusion_alphas_cumprod", None),
-                        dim=37,
-                        num_samples=1,
-                    )[0]
-                    # 上位7個を採用
-                    nums = np.argsort(x)[-7:] + 1
-                    nums = _ensure_valid(nums.tolist(), self.cfg.low, self.cfg.high)
-                    if constraint_score(nums, self.cfg) >= accept_threshold:
-                        out.append(nums)
-            except Exception:
-                pass
+        # アニーリング係数
+        def temp(t):
+            # 指数スケジュール
+            r = t / max(1, max_steps - 1)
+            return T_start * (T_end / T_start) ** r
 
-        # 2) Diffusion が使えない／足りない場合は確率サンプル
+        trials = 0
+        max_trials = n_samples * 30
+
+        while len(out) < n_samples and trials < max_trials:
+            trials += 1
+            cur = self._init_candidate()
+            E = self._energy(cur)
+
+            for step in range(max_steps):
+                T = temp(step)
+                prop = self._propose(cur)
+                Ep = self._energy(prop)
+                dE = Ep - E
+                if dE <= 0 or random.random() < math.exp(-dE / max(1e-8, T)):
+                    cur, E = prop, Ep
+
+            # 受理：制約スコアで下限確認（使い勝手維持）
+            if constraint_score(cur, self.cfg) >= accept_threshold:
+                key = tuple(sorted(cur))
+                if key not in seen:
+                    seen.add(key)
+                    out.append(sorted(cur))
+
+        # 足りなければランダムで充足（まれ）
         while len(out) < n_samples:
-            cand = list(np.random.choice(pool, size=7, replace=False, p=weights)) if weights is not None else list(np.random.choice(pool, size=7, replace=False))
-            cand = _ensure_valid(cand, self.cfg.low, self.cfg.high)
-            if constraint_score(cand, self.cfg) >= accept_threshold:
-                out.append(cand)
-        return out
+            c = self._init_candidate()
+            out.append(sorted(c))
 
+        return out
 
 # ——————————————————————————————————————————————
 # 限界突破 Predictor（メイン）
@@ -397,17 +422,15 @@ class LimitBreakPredictor:
         self.cfg = cfg or ConstraintConfig()
         self.base: Optional[LotoPredictor] = None
         self._init_base()
-        self.sampler = ConditionalSampler(self.cfg)
+        self.sampler = ConditionalSampler(self.cfg)   # ← 完全版
         self.engine = EvolutionEngine(self.cfg)
 
     def _init_base(self):
         try:
-            # 入力次元は呼び出し時に決定するためダミーで初期化 → 予測前に置き換え
             self.base = LotoPredictor(input_size=10, hidden_size=128, output_size=7)  # type: ignore
         except Exception:
             self.base = None
 
-    # ——— メインパイプライン ———
     def limit_break_predict(
         self,
         latest_data: pd.DataFrame,
@@ -416,10 +439,8 @@ class LimitBreakPredictor:
         ga_pop_size: int = 160,
         sampler_n: int = 120,
     ) -> List[PredWithScore]:
-        """最終的に n_out 件の（数字, 信頼度）を返す。"""
         set_global_seed(20250819)
 
-        # 未来リークを避け、学習/特徴量用の履歴を作成
         latest_data = latest_data.copy()
         latest_data["抽せん日"] = pd.to_datetime(latest_data["抽せん日"], errors="coerce")
         target_date = latest_data["抽せん日"].max()
@@ -427,24 +448,33 @@ class LimitBreakPredictor:
         if history_df.empty:
             history_df = latest_data.iloc[:-1].copy()
 
-        # ベース予測候補（存在すれば）
+        # ベース予測候補（利用可能なら）—— X を使い安全ガード
         seed_candidates: List[NumberSet] = []
-        if self.base is not None:
-            try:
-                # 入力次元を合わせるため一度前処理
-                X, _, _ = preprocess_data(latest_data)
-                input_size = X.shape[1] if X is not None and hasattr(X, "shape") else 10
-                # base の入出力を上書き初期化（安全）
-                self.base = LotoPredictor(input_size=input_size, hidden_size=128, output_size=7)  # type: ignore
-                preds, confs = self.base.predict(latest_data, num_candidates=120)
-                if preds is not None:
-                    seed_candidates = [
-                        _ensure_valid(p, self.cfg.low, self.cfg.high) for p in preds
-                    ]
-            except Exception:
-                traceback.print_exc()
+        try:
+            X, _, _ = preprocess_data(history_df)
+            input_size = int(X.shape[1]) if (X is not None and hasattr(X, "shape")) else 0
+            if self.base is not None and input_size > 0:
+                try:
+                    self.base = LotoPredictor(input_size=input_size, hidden_size=128, output_size=7)  # type: ignore
+                except Exception:
+                    self.base = None
+            if self.base is not None and hasattr(self.base, "predict"):
+                if hasattr(self.base, "fit"):
+                    try:
+                        self.base.fit(X, None)  # type: ignore
+                    except Exception:
+                        pass
+                try:
+                    preds_confs = self.base.predict(X, num_candidates=120)  # type: ignore
+                    preds = preds_confs[0] if isinstance(preds_confs, tuple) and len(preds_confs) >= 1 else preds_confs
+                    if preds is not None:
+                        seed_candidates = [_ensure_valid(p, self.cfg.low, self.cfg.high) for p in preds if p is not None]
+                except Exception:
+                    seed_candidates = []
+        except Exception:
+            seed_candidates = []
 
-        # 条件付きサンプラーで強化（Diffusion/GAN 利用 or 確率サンプル）
+        # 完全版サンプラー
         cond_samples = self.sampler.sample_with_constraints(
             base_predictor=self.base,
             hist_df=history_df,
@@ -463,18 +493,17 @@ class LimitBreakPredictor:
             elite=max(ga_pop_size // 12, 8),
         )
 
-        # 最終スコアリング
+        # スコアリング
         pair_freq, triple_freq = pair_triple_frequencies(history_df)
         scored: List[PredWithScore] = []
         for c in evolved:
             cscore = constraint_score(c, self.cfg)
             co = cooccurrence_score(c, pair_freq, triple_freq)
             final = 0.6 * cscore + 0.4 * co
-            # 信頼度 0.75〜1.15 に射影
             conf = 0.75 + 0.40 * final
             scored.append((c, float(conf)))
 
-        # 同一候補の重複を除去
+        # 重複除去
         uniq: Dict[Tuple[int, ...], float] = {}
         for nums, conf in scored:
             key = tuple(nums)
@@ -484,14 +513,13 @@ class LimitBreakPredictor:
                 uniq[key] = max(uniq[key], conf)
 
         final = sorted(uniq.items(), key=lambda x: x[1], reverse=True)[:n_out]
-        return [ (list(k), v) for k, v in final ]
+        return [(list(k), v) for k, v in final]
 
     def save_predictions(self, predictions: List[PredWithScore], drawing_date: str, filename: str = "loto7_predictions.csv"):
         save_predictions_to_csv(predictions, drawing_date, filename=filename)
 
-
 # ——————————————————————————————————————————————
-# CLI エントリ
+# CLI
 # ——————————————————————————————————————————————
 if __name__ == "__main__":
     import asyncio
@@ -502,7 +530,6 @@ if __name__ == "__main__":
 
     try:
         data = pd.read_csv("loto7.csv", encoding="utf-8-sig")
-        # リスト文字列を配列に
         def _to_list(x):
             if isinstance(x, list):
                 return x
@@ -518,7 +545,6 @@ if __name__ == "__main__":
         print(f"[ERROR] loto7.csv の読み込みに失敗しました: {e}")
         raise SystemExit(1)
 
-    # 公式サイトから抽せん日を取れる環境なら使用（失敗時はフォールバック）
     draw_date = None
     try:
         loop = asyncio.new_event_loop()
@@ -536,7 +562,7 @@ if __name__ == "__main__":
     lbp = LimitBreakPredictor()
     preds = lbp.limit_break_predict(data.tail(50), n_out=50)
 
-    print("=== 限界突破 予測（上位5件） ===")
+    print("\n=== 限界突破 予測（上位5件） ===")
     for i, (nums, conf) in enumerate(preds[:5], 1):
         print(f"#{i}: {nums}  信頼度={conf:.3f}")
 
