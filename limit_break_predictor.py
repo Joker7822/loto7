@@ -536,8 +536,7 @@ if __name__ == "__main__":
     lbp = LimitBreakPredictor()
     preds = lbp.limit_break_predict(data.tail(50), n_out=50)
 
-    print("
-=== 限界突破 予測（上位5件） ===")
+    print("=== 限界突破 予測（上位5件） ===")
     for i, (nums, conf) in enumerate(preds[:5], 1):
         print(f"#{i}: {nums}  信頼度={conf:.3f}")
 
