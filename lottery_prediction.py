@@ -20,25 +20,6 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import numpy as np
-
-def stacking_predict_block(self, X, base_dict):
-    import numpy as np
-    if not getattr(self, "meta_models", None) or any(m is None for m in self.meta_models):
-        mats = list(base_dict.values())
-        return np.mean(mats, axis=0)
-    N = next(iter(base_dict.values())).shape[0]
-    out = np.zeros((N, 7), dtype=float)
-    for i in range(7):
-        entry = self.meta_models[i]
-        if entry is None:
-            mats = list(base_dict.values())
-            out[:, i] = np.mean(mats, axis=0)[:, i]
-            continue
-        model, keys = entry
-        cols = [base_dict[k][:, i].reshape(-1, 1) for k in keys]
-        Xi = np.hstack(cols)
-        out[:, i] = model.predict(Xi)
-    return out
 import stat
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split, cross_val_score
@@ -65,7 +46,7 @@ from sklearn.decomposition import PCA
 from sklearn.ensemble import StackingRegressor
 from statsmodels.tsa.arima.model import ARIMA
 from stable_baselines3 import PPO
-from gym import spaces
+from gymnasium import spaces
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -79,7 +60,7 @@ import asyncio
 import warnings
 import re
 import platform
-import gym
+import gymnasium as gym
 import sys
 import os
 import random
@@ -96,7 +77,7 @@ import shutil
 import traceback
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 import tensorflow as tf
-from gym.utils import seeding
+from gymnasium.utils import seeding
 import time
 import subprocess
 
@@ -654,8 +635,6 @@ class LotoPredictor:
         self.diffusion_betas = None
         self.diffusion_alphas_cumprod = None
         self.regression_models = [None] * 7
-        self.meta_models = [None] * 7  # [STACKING-INIT]
-
         
         # --- GANモデルロード（存在すれば） ---
         if os.path.exists("gan_model.pth"):
@@ -844,13 +823,6 @@ class LotoPredictor:
 
         self.ppo_model = PPO("MlpPolicy", env, seed=42, verbose=0)
         self.ppo_model.learn(total_timesteps=50000)
-        
-        # [STACKING-TRAIN] メタスタッキング学習（ホールドアウトで学習）
-        try:
-            self._train_meta_models(X_test, y_test)
-        except Exception as e:
-            print(f"[STACK] メタ学習失敗: {e}")
-
         self.ppo_model.save(os.path.join(model_dir, "ppo_model.zip"))
 
         print("[INFO] 全モデルの訓練と保存が完了しました")
@@ -925,82 +897,7 @@ class LotoPredictor:
 
         if X is None or len(X) == 0:
             print("[ERROR] 予測用データが空です")
-            return
-    # ===== [STACKING-METHODS] メタスタッキング補助 =====
-    def _collect_base_preds(self, X):
-        import numpy as np
-        preds = {}
-        try:
-            if getattr(self, "regression_models", None) and self.regression_models[0] is not None:
-                import pandas as pd
-                X_df = pd.DataFrame(X)
-                ag_mat = np.column_stack([self.regression_models[j].predict(X_df) for j in range(7)])
-                preds["ag"] = ag_mat.astype(float)
-        except Exception as e:
-            print(f"[STACK] AutoGluon予測取得に失敗: {e}")
-        try:
-            if getattr(self, "lstm_model", None) is not None:
-                import torch
-                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-                self.lstm_model.to(device)
-                self.lstm_model.eval()
-                X_tensor = torch.tensor(X.reshape(-1, 1, X.shape[1]), dtype=torch.float32).to(device)
-                with torch.no_grad():
-                    lstm_mat = self.lstm_model(X_tensor).detach().cpu().numpy()
-                preds["lstm"] = lstm_mat.astype(float)
-        except Exception as e:
-            print(f"[STACK] LSTM予測取得に失敗: {e}")
-        try:
-            if getattr(self, "set_transformer_model", None) is not None:
-                st_mat = predict_with_set_transformer(self.set_transformer_model, X)
-                preds["st"] = st_mat.astype(float)
-        except Exception as e:
-            print(f"[STACK] SetTransformer予測取得に失敗: {e}")
-        try:
-            if getattr(self, "tabnet_model", None) is not None:
-                from tabnet_module import predict_tabnet
-                tb_mat = predict_tabnet(self.tabnet_model, X)
-                preds["tabnet"] = tb_mat.astype(float)
-        except Exception as e:
-            print(f"[STACK] TabNet予測取得に失敗: {e}")
-        try:
-            if getattr(self, "bnn_model", None) is not None and getattr(self, "bnn_guide", None) is not None:
-                from bnn_module import predict_bayesian_regression
-                bnn_mat = predict_bayesian_regression(self.bnn_model, self.bnn_guide, X, samples=1)
-                import numpy as np
-                bnn_mat = np.asarray(bnn_mat)
-                if bnn_mat.ndim == 3:
-                    bnn_mat = bnn_mat[0]
-                preds["bnn"] = bnn_mat.astype(float)
-        except Exception as e:
-            print(f"[STACK] BNN予測取得に失敗: {e}")
-        return preds
-
-    def _train_meta_models(self, X_test, y_test):
-        import numpy as np
-        from sklearn.linear_model import Ridge
-        base = self._collect_base_preds(X_test)
-        if not base:
-            print("[STACK] ベース予測が得られないため、メタ学習をスキップします。")
-            self.meta_models = [None] * 7
-            return
-        keys = list(base.keys())
-        N = X_test.shape[0]
-        self.meta_models = [None] * 7
-        for i in range(7):
-            cols = []
-            for k in keys:
-                mat = base[k]
-                if mat.shape != (N, 7):
-                    raise ValueError(f"[STACK] 形状不一致: {k} has {mat.shape}, expected {(N, 7)}")
-                cols.append(mat[:, i].reshape(-1, 1))
-            Xi = np.hstack(cols)
-            yi = y_test[:, i].astype(float)
-            model = Ridge(alpha=1.0)
-            model.fit(Xi, yi)
-            self.meta_models[i] = (model, keys)
-        print(f"[STACK] メタモデル学習完了 (#base={len(keys)}) → keys={keys}")
-     None, None
+            return None, None
 
         print(f"[DEBUG] 予測用データの shape: {X.shape}")
 
@@ -1041,19 +938,18 @@ class LotoPredictor:
                 with torch.no_grad():
                     lstm_predictions = self.lstm_model(X_tensor).detach().cpu().numpy()
 
-                
-                base_dict = {"ag": ml_predictions, "lstm": lstm_predictions}
-                try:
-                    base_dict["st"] = st_predictions
-                except Exception: pass
-                try:
-                    base_dict["tabnet"] = tabnet_preds
-                except Exception: pass
-                try:
-                    base_dict["bnn"] = bnn_preds
-                except Exception: pass
-                final_predictions = stacking_predict_block(self, X, base_dict)
-        
+                final_predictions = (ml_predictions + lstm_predictions) / 2
+
+                if self.set_transformer_model:
+                    st_predictions = predict_with_set_transformer(self.set_transformer_model, X)
+                    final_predictions = (final_predictions + st_predictions) / 2
+
+                if hasattr(self, "tabnet_model") and self.tabnet_model is not None:
+                    from tabnet_module import predict_tabnet
+                    tabnet_preds = predict_tabnet(self.tabnet_model, X)
+                    final_predictions = (final_predictions + tabnet_preds) / 2
+
+                for pred in final_predictions:
                     numbers = np.round(pred).astype(int)
                     numbers = np.clip(numbers, 1, 37)
                     numbers = np.sort(numbers)
@@ -1153,12 +1049,74 @@ class LotoPredictor:
             print(f"[INFO] 総予測候補数（全モデル統合）: {len(all_predictions)}件")
             numbers_only = [pred[0] for pred in all_predictions]
             confidence_scores = [pred[1] for pred in all_predictions]
-            return numbers_only, confidence_scores
+
+            # === ここで外だしした関数を呼ぶだけ ===
+            numbers_only = _stable_diverse_selection(
+                numbers_only, confidence_scores, latest_data,
+                k=30, lambda_div=0.6, temperature=0.35
+            )
+            confidence_scores = confidence_scores[:len(numbers_only)]
 
         except Exception as e:
             print(f"[ERROR] 予測中にエラー発生: {e}")
             traceback.print_exc()
-            return None, None
+            return numbers_only, confidence_scores
+            
+        def _stable_diverse_selection(numbers_only, confidence_scores, latest_data,
+                                    k=30, lambda_div=0.6, temperature=0.35):
+            import hashlib, numpy as np, pandas as pd
+            # 1) 安定シード（抽せん日で決定）
+            if isinstance(latest_data, pd.DataFrame) and "抽せん日" in latest_data.columns:
+                td = str(pd.to_datetime(latest_data["抽せん日"].max()).date())
+            else:
+                td = "unknown"
+            seed = int(hashlib.md5(td.encode()).hexdigest()[:8], 16)
+            set_global_seed(seed)
+
+            # 2) マージナル確率
+            conf = np.array(confidence_scores, dtype=float)
+            conf = (conf - conf.min()) / (conf.max() - conf.min() + 1e-9)
+            weights = np.exp(conf / max(1e-6, temperature))
+            weights = weights / (weights.sum() + 1e-9)
+
+            marg = np.zeros(37)
+            for cand, w in zip(numbers_only, weights):
+                for n in cand:
+                    marg[n-1] += w
+            marg = marg / (marg.sum() + 1e-9)
+
+            base_scores = [sum(np.log(marg[n-1] + 1e-9) for n in cand) for cand in numbers_only]
+
+            # 3) Greedy多様化（Jaccardペナルティ）
+            selected, used = [], set()
+            for _ in range(min(k, len(numbers_only))):
+                best_i, best_val = None, -1e12
+                for i, cand in enumerate(numbers_only):
+                    if i in used:
+                        continue
+                    penalty = 0.0
+                    for s in selected:
+                        inter = len(set(cand) & set(s))
+                        union = len(set(cand) | set(s))
+                        penalty += inter / union
+                    val = base_scores[i] - lambda_div * penalty
+                    if val > best_val:
+                        best_val, best_i = val, i
+                used.add(best_i)
+                selected.append(numbers_only[best_i])
+            return selected
+
+        try:
+            numbers_only = _stable_diverse_selection(
+                numbers_only, confidence_scores, latest_data,
+                k=30, lambda_div=0.6, temperature=0.35
+            )
+            confidence_scores = confidence_scores[:len(numbers_only)]
+
+        except Exception as e:
+            print(f"[ERROR] 予測中にエラー発生: {e}")
+            traceback.print_exc()
+            return numbers_only, confidence_scores
         
 def evaluate_predictions(predictions, actual_numbers):
     matches = []
@@ -2049,3 +2007,27 @@ def generate_evolution_graph_from_csv(csv_path="logs/evolution.csv", metric="f1"
     plt.close()
     print(f"[LOG] 進化グラフを保存: {output_file}")
 # === /再学習サマリ・進化ログ ここまで ==========================================
+
+def evaluate_prediction_accuracy_with_bonus_compat(*args, **kwargs):
+    """Compatibility shim.
+    Older code may call this function with various parameters like:
+      - evaluate_prediction_accuracy_with_bonus_compat(prediction_file=..., output_csv=..., output_txt=...)
+      - evaluate_prediction_accuracy_with_bonus_compat(predictions_file=..., results_file=...)
+      - evaluate_prediction_accuracy_with_bonus_compat(pred_file, res_file)
+    This wrapper maps to evaluate_prediction_accuracy_with_bonus(predictions_file, results_file).
+    Any extra arguments are ignored.
+    """
+    # Try to extract the two essential file paths from kwargs or positional args.
+    predictions_file = kwargs.get("prediction_file") or kwargs.get("predictions_file")
+    results_file = kwargs.get("results_file") or kwargs.get("result_file")
+    # Fallback to positional args
+    if predictions_file is None and len(args) >= 1:
+        predictions_file = args[0]
+    if results_file is None and len(args) >= 2:
+        results_file = args[1]
+    # Final fallback: common defaults
+    if predictions_file is None:
+        predictions_file = "loto7_predictions.csv"
+    if results_file is None:
+        results_file = "loto7.csv"
+    return evaluate_prediction_accuracy_with_bonus(predictions_file, results_file)
