@@ -421,7 +421,7 @@ class LimitBreakPredictor:
     
     def bulk_limit_break_all_past_draws(self, full_data: pd.DataFrame, save_dir: str = "bulk_predictions"):
         """
-        過去すべての抽選日に対して一括で予測を実行する
+        過去すべての抽選日に対して一括で予測を実行する（その時点の履歴だけを使用）
         :param full_data: 抽選結果全体（DataFrame）
         :param save_dir: 出力CSV保存ディレクトリ
         """
@@ -430,15 +430,25 @@ class LimitBreakPredictor:
         full_data["抽せん日"] = pd.to_datetime(full_data["抽せん日"])
         sorted_dates = sorted(full_data["抽せん日"].unique())
 
-        for i in range(1, len(sorted_dates)):
+        for i in range(10, len(sorted_dates)):
             target_date = sorted_dates[i]
-            subset = full_data[full_data["抽せん日"] <= target_date].copy()
-            subset = subset.sort_values("抽せん日")
+            history_df = full_data[full_data["抽せん日"] < target_date].copy()
 
-            print(f"\n[INFO] {target_date.date()} 時点の予測を実行中...（{i}/{len(sorted_dates)-1}）")
+            if history_df.empty:
+                continue
+
+            print(f"\n[INFO] {target_date.date()} 時点の履歴で予測を実行中...（{i}/{len(sorted_dates)-1}）")
 
             try:
-                predictions = self.limit_break_predict(subset)
+                # 現在日付を末尾に追加（予測対象）
+                latest_df = pd.concat([history_df, pd.DataFrame([{
+                    "抽せん日": target_date,
+                    "本数字": [0]*7,
+                    "ボーナス数字": [0,0]
+                }])], ignore_index=True)
+
+                predictions = self.limit_break_predict(latest_df)
+
                 if not predictions:
                     print(f"[WARN] 予測失敗: {target_date}")
                     continue
