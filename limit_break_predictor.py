@@ -440,14 +440,10 @@ class LimitBreakPredictor:
             print(f"\n[INFO] {target_date.date()} 時点の履歴で予測を実行中...（{i}/{len(sorted_dates)-1}）")
 
             try:
-                # 現在日付を末尾に追加（予測対象）
-                latest_df = pd.concat([history_df, pd.DataFrame([{
-                    "抽せん日": target_date,
-                    "本数字": [0]*7,
-                    "ボーナス数字": [0,0]
-                }])], ignore_index=True)
-
-                predictions = self.limit_break_predict(latest_df)
+                predictions = self.limit_break_predict(
+                    latest_data=history_df,
+                    target_date=target_date
+                )
 
                 if not predictions:
                     print(f"[WARN] 予測失敗: {target_date}")
@@ -486,7 +482,7 @@ class LimitBreakPredictor:
 
         latest_data = latest_data.copy()
         latest_data["抽せん日"] = pd.to_datetime(latest_data["抽せん日"], errors="coerce")
-        target_date = latest_data["抽せん日"].max()
+        target_date = target_date or latest_data[\"抽せん日\"].max()
         history_df = latest_data[latest_data["抽せん日"] < target_date]
         if history_df.empty:
             history_df = latest_data.iloc[:-1].copy()
