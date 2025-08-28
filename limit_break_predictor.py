@@ -482,7 +482,7 @@ class LimitBreakPredictor:
 
         latest_data = latest_data.copy()
         latest_data["抽せん日"] = pd.to_datetime(latest_data["抽せん日"], errors="coerce")
-        target_date = target_date or latest_data[\"抽せん日\"].max()
+        target_date = target_date or latest_data["抽せん日"].max()
         history_df = latest_data[latest_data["抽せん日"] < target_date]
         if history_df.empty:
             history_df = latest_data.iloc[:-1].copy()
