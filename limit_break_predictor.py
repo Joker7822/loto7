@@ -521,7 +521,50 @@ class LimitBreakPredictor:
 # ——————————————————————————————————————————————
 # CLI
 # ——————————————————————————————————————————————
+
+import os
+
+def bulk_predict_all_past_draws(input_csv: str = "loto7.csv", output_dir: str = "bulk_predictions"):
+    """
+    過去の抽せん結果すべてに対して予測を実行し、日付ごとに個別CSV保存。
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    try:
+        data = pd.read_csv(input_csv, encoding="utf-8-sig")
+        def _to_list(x):
+            if isinstance(x, list):
+                return x
+            if isinstance(x, str):
+                x = x.strip("[]").replace("'", "").replace('"', "")
+                arr = [int(t) for t in x.split() if t.isdigit()]
+                if len(arr) == 7:
+                    return arr
+            return []
+        data["本数字"] = data["本数字"].apply(_to_list)
+        data["抽せん日"] = pd.to_datetime(data["抽せん日"], errors="coerce")
+        lbp = LimitBreakPredictor()
+        unique_dates = sorted(data["抽せん日"].dropna().unique())
+        for i in range(10, len(unique_dates)):
+            target = unique_dates[i]
+            subset = data[data["抽せん日"] <= target].copy()
+            preds = lbp.limit_break_predict(subset, n_out=50)
+            filename = f"{output_dir}/predict_{target.strftime('%Y%m%d')}.csv"
+            lbp.save_predictions(preds, target.strftime("%Y-%m-%d"), filename=filename)
+            print(f"[OK] {target.date()} → {filename}")
+    except Exception as e:
+        print(f"[ERROR] バルク予測中にエラーが発生: {e}")
 if __name__ == "__main__":
+
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--bulk", action="store_true", help="過去全期間の一括予測を行う")
+    args = parser.parse_args()
+
+    if args.bulk:
+        bulk_predict_all_past_draws()
+        raise SystemExit(0)
+
     import asyncio
 
     def _get_latest_date_fallback(df: pd.DataFrame) -> str:
@@ -568,55 +611,3 @@ if __name__ == "__main__":
 
     lbp.save_predictions(preds, draw_date)
     print("[DONE] 予測を CSV に保存しました → loto7_predictions.csv")
-
-
-def bulk_limit_break_predict_all_past_draws():
-    set_global_seed(42)
-    df = pd.read_csv("loto7.csv")
-    df["抽せん日"] = pd.to_datetime(df["抽せん日"], errors='coerce')
-    df = df.sort_values("抽せん日").reset_index(drop=True)
-
-    print("[INFO] 抽せんデータ読み込み完了:", len(df), "件")
-
-    pred_file = "limit_break_predictions.csv"
-    skip_dates = set()
-
-    if os.path.exists(pred_file):
-        try:
-            pred_df = pd.read_csv(pred_file, encoding='utf-8-sig')
-            if "抽せん日" in pred_df.columns:
-                skip_dates = set(pd.to_datetime(pred_df["抽せん日"], errors='coerce').dropna().dt.strftime("%Y-%m-%d"))
-        except Exception as e:
-            print(f"[WARNING] 予測ファイル読み込みエラー: {e}")
-    else:
-        with open(pred_file, "w", encoding="utf-8-sig") as f:
-            f.write("抽せん日,予測1,信頼度1,予測2,信頼度2,予測3,信頼度3,予測4,信頼度4,予測5,信頼度5\n")
-
-    predictor = LimitBreakPredictor()
-
-    for i in range(10, len(df)):
-        set_global_seed(1000 + i)
-        test_date = df.iloc[i]["抽せん日"]
-        test_date_str = test_date.strftime("%Y-%m-%d")
-
-        if test_date_str in skip_dates:
-            print(f"[INFO] 既に予測済み: {test_date_str} → スキップ")
-            continue
-
-        print(f"\n=== {test_date_str} のLimitBreak予測を開始 ===")
-        latest_data = df.iloc[i-10:i+1].copy()
-
-        try:
-            predictions = predictor.limit_break_predict(latest_data)
-        except Exception as e:
-            print(f"[ERROR] LimitBreak予測失敗: {test_date_str}: {e}")
-            continue
-
-        if not predictions:
-            print(f"[WARNING] {test_date_str} の予測が空です")
-            continue
-
-        save_predictions_to_csv(predictions, test_date_str, filename=pred_file)
-        git_commit_and_push(pred_file, "LimitBreak 過去予測更新 [skip ci]")
-
-    print("\n=== LimitBreak 一括予測完了 ===")
