@@ -15,7 +15,6 @@ if os.path.exists(optuna_dir):
 else:
     print("[INFO] 最適化パラメータディレクトリが見つかりませんでした。デフォルト設定で実行します。")
 
-
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -86,7 +85,6 @@ if platform.system() == "Windows":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 warnings.filterwarnings("ignore")
-
 
 def _save_all_models_no_self(predictor, model_dir):
     os.makedirs(model_dir, exist_ok=True)
@@ -673,31 +671,6 @@ class LotoPredictor:
         latest_valid_date = data["抽せん日"].max()
         data = data[data["抽せん日"] <= latest_valid_date]
         print(f"[INFO] 未来データ除外済: {latest_valid_date.date()} 以前 {len(data)}件")
-
-        true_numbers = data['本数字'].tolist()
-        self_data = load_self_predictions(file_path="self_predictions.csv", min_match_threshold=6, true_data=true_numbers)
-        high_match_combos = extract_high_match_patterns(data, min_match=6)
-
-        if self_data or high_match_combos:
-            print("[INFO] 過去の高一致自己予測＋高一致本物データを追加します")
-            new_rows = []
-            for nums in (self_data or []):
-                new_rows.append({
-                    '抽せん日': pd.Timestamp.now(),
-                    '回号': 9999,
-                    '本数字': nums,
-                    'ボーナス数字': [0, 0]
-                })
-            for nums in (high_match_combos or []):
-                new_rows.append({
-                    '抽せん日': pd.Timestamp.now(),
-                    '回号': 9999,
-                    '本数字': nums,
-                    'ボーナス数字': [0, 0]
-                })
-            if new_rows:
-                new_data = pd.DataFrame(new_rows)
-                data = pd.concat([data, new_data], ignore_index=True)
 
         X, y, self.scaler = preprocess_data(data)
         if X is None or y is None:
@@ -1411,9 +1384,6 @@ def main_with_improved_predictions():
                     return
 
                 verified_predictions = verify_predictions(list(zip(predictions, confidence_scores)), history_data)
-
-                save_self_predictions(verified_predictions)
-
                 for i, (numbers, confidence) in enumerate(verified_predictions[:5], 1):
                     st.write(f"予測 {i}: {numbers} (信頼度: {confidence:.3f})")
 
@@ -1435,9 +1405,6 @@ def main_with_improved_predictions():
                 return
 
             verified_predictions = verify_predictions(list(zip(predictions, confidence_scores)), history_data)
-
-            save_self_predictions(verified_predictions)
-
             print("\n=== 予測結果 ===")
             for i, (numbers, confidence) in enumerate(verified_predictions[:5], 1):
                 print(f"予測 {i}: {numbers} (信頼度: {confidence:.3f})")
@@ -1650,7 +1617,6 @@ def verify_predictions(predictions, historical_data, top_k=5):
     print(f"[INFO] 最終選択された予測数: {len(selected)}")
     return selected
 
-
 def extract_strong_features(evaluation_df, feature_df):
     """
     過去予測評価と特徴量を結合し、「本数字一致数」と相関の高い特徴量を抽出
@@ -1803,7 +1769,6 @@ def bulk_predict_all_past_draws():
             continue
 
         verified_predictions = verify_predictions(list(zip(predictions, confidence_scores)), train_data)
-        save_self_predictions(verified_predictions)
         save_predictions_to_csv(verified_predictions, test_date)
         git_commit_and_push("loto7_predictions.csv", "Auto update loto7_predictions.csv [skip ci]")
 
@@ -1837,7 +1802,6 @@ def bulk_predict_all_past_draws():
                 predictions, confidence_scores = predictor.predict(latest_data)
                 if predictions is not None:
                     verified_predictions = verify_predictions(list(zip(predictions, confidence_scores)), train_data)
-                    save_self_predictions(verified_predictions)
                     save_predictions_to_csv(verified_predictions, future_date)
                     git_commit_and_push("loto7_predictions.csv", "Auto predict future draw [skip ci]")
                     print(f"[INFO] 未来予測（{future_date_str}）完了")
@@ -1854,7 +1818,6 @@ if __name__ == "__main__":
     import multiprocessing
     multiprocessing.set_start_method('spawn', force=True)
     bulk_predict_all_past_draws()
-
 
 def log_prediction_summary(evaluation_df, log_path="prediction_accuracy_log.txt"):
     if evaluation_df is None or evaluation_df.empty:
@@ -1873,7 +1836,6 @@ def log_prediction_summary(evaluation_df, log_path="prediction_accuracy_log.txt"
             f.write(f"{date}: 一致={match}本, ボーナス={bonus}, 等級={rank}, 信頼度={confidence}, 番号={pred}\n")
 
     print(f"[INFO] 予測精度履歴を {log_path} に追記しました")
-
 
 # === 再学習サマリ・進化ログ（追記） ==========================================
 import csv
