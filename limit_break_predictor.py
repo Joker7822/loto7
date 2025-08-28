@@ -418,6 +418,39 @@ class ConditionalSampler:
 # 限界突破 Predictor（メイン）
 # ——————————————————————————————————————————————
 class LimitBreakPredictor:
+    
+    def bulk_limit_break_all_past_draws(self, full_data: pd.DataFrame, save_dir: str = "bulk_predictions"):
+        """
+        過去すべての抽選日に対して一括で予測を実行する
+        :param full_data: 抽選結果全体（DataFrame）
+        :param save_dir: 出力CSV保存ディレクトリ
+        """
+        import os
+        os.makedirs(save_dir, exist_ok=True)
+        full_data["抽せん日"] = pd.to_datetime(full_data["抽せん日"])
+        sorted_dates = sorted(full_data["抽せん日"].unique())
+
+        for i in range(1, len(sorted_dates)):
+            target_date = sorted_dates[i]
+            subset = full_data[full_data["抽せん日"] <= target_date].copy()
+            subset = subset.sort_values("抽せん日")
+
+            print(f"\n[INFO] {target_date.date()} 時点の予測を実行中...（{i}/{len(sorted_dates)-1}）")
+
+            try:
+                predictions = self.limit_break_predict(subset)
+                if not predictions:
+                    print(f"[WARN] 予測失敗: {target_date}")
+                    continue
+
+                from lottery_prediction import save_predictions_to_csv
+                filename = os.path.join(save_dir, f"prediction_{target_date.date()}.csv")
+                save_predictions_to_csv(predictions, drawing_date=str(target_date.date()), filename=filename)
+                print(f"[INFO] 保存完了 → {filename}")
+
+            except Exception as e:
+                print(f"[ERROR] {target_date} の予測でエラー発生: {e}")
+
     def __init__(self, cfg: Optional[ConstraintConfig] = None):
         self.cfg = cfg or ConstraintConfig()
         self.base: Optional[LotoPredictor] = None
@@ -521,50 +554,7 @@ class LimitBreakPredictor:
 # ——————————————————————————————————————————————
 # CLI
 # ——————————————————————————————————————————————
-
-import os
-
-def bulk_predict_all_past_draws(input_csv: str = "loto7.csv", output_dir: str = "bulk_predictions"):
-    """
-    過去の抽せん結果すべてに対して予測を実行し、日付ごとに個別CSV保存。
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    try:
-        data = pd.read_csv(input_csv, encoding="utf-8-sig")
-        def _to_list(x):
-            if isinstance(x, list):
-                return x
-            if isinstance(x, str):
-                x = x.strip("[]").replace("'", "").replace('"', "")
-                arr = [int(t) for t in x.split() if t.isdigit()]
-                if len(arr) == 7:
-                    return arr
-            return []
-        data["本数字"] = data["本数字"].apply(_to_list)
-        data["抽せん日"] = pd.to_datetime(data["抽せん日"], errors="coerce")
-        lbp = LimitBreakPredictor()
-        unique_dates = sorted(data["抽せん日"].dropna().unique())
-        for i in range(10, len(unique_dates)):
-            target = unique_dates[i]
-            subset = data[data["抽せん日"] <= target].copy()
-            preds = lbp.limit_break_predict(subset, n_out=50)
-            filename = f"{output_dir}/predict_{target.strftime('%Y%m%d')}.csv"
-            lbp.save_predictions(preds, target.strftime("%Y-%m-%d"), filename=filename)
-            print(f"[OK] {target.date()} → {filename}")
-    except Exception as e:
-        print(f"[ERROR] バルク予測中にエラーが発生: {e}")
 if __name__ == "__main__":
-
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--bulk", action="store_true", help="過去全期間の一括予測を行う")
-    args = parser.parse_args()
-
-    if args.bulk:
-        bulk_predict_all_past_draws()
-        raise SystemExit(0)
-
     import asyncio
 
     def _get_latest_date_fallback(df: pd.DataFrame) -> str:
