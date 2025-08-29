@@ -476,14 +476,14 @@ class LimitBreakPredictor:
         n_out: int = 50,
         ga_generations: int = 42,
         ga_pop_size: int = 160,
-        sampler_n: int = 120,
-    ) -> List[PredWithScore]:
+        sampler_n: int = 120, target_date: Optional[pd.Timestamp] = None) -> List[PredWithScore]:
         set_global_seed(20250819)
 
         latest_data = latest_data.copy()
         latest_data["抽せん日"] = pd.to_datetime(latest_data["抽せん日"], errors="coerce")
-        target_date = target_date or latest_data["抽せん日"].max()
-        history_df = latest_data[latest_data["抽せん日"] < target_date]
+        if target_date is None:
+            target_date = latest_data["抽せん日"].max() if not latest_data.empty else None
+        history_df = latest_data[latest_data["抽せん日"] < target_date] if target_date is not None else latest_data
         if history_df.empty:
             history_df = latest_data.iloc[:-1].copy()
 
