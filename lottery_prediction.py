@@ -1993,3 +1993,399 @@ def evaluate_prediction_accuracy_with_bonus_compat(*args, **kwargs):
     if results_file is None:
         results_file = "loto7.csv"
     return evaluate_prediction_accuracy_with_bonus(predictions_file, results_file)
+
+
+
+# ============================================================================
+# LimitBreak Integration (Constraint-driven sampler + Evolutionary GA)
+# Appended automatically on: 2025-08-29T01:12:13.190633
+# This section is self-contained and can run without external dependencies
+# beyond pandas/numpy. It does not modify existing functions; instead it
+# provides helper hooks to combine with your current predictor results.
+# ============================================================================
+
+from dataclasses import dataclass
+from typing import List, Tuple, Dict, Optional, Iterable
+import math
+import numpy as np
+import os
+
+# ---- Utilities that may already exist in your codebase ----
+def set_global_seed(seed: int = 42):
+    """Best-effort global seed setter (idempotent)."""
+    try:
+        import random, numpy as _np
+        random.seed(seed); _np.random.seed(seed)
+        try:
+            import torch
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+NumberSet = List[int]
+PredWithScore = Tuple[NumberSet, float]
+
+@dataclass
+class ConstraintConfig:
+    odd_min: int = 2
+    odd_max: int = 5
+    sum_min: int = 100
+    sum_max: int = 150
+    min_gap: int = 2
+    min_range: int = 15
+    low: int = 1
+    high: int = 37
+
+def _ensure_valid(numbers: Iterable[int], low: int = 1, high: int = 37) -> NumberSet:
+    s = sorted(set(int(n) for n in numbers if low <= int(n) <= high))
+    import random as _r
+    while len(s) < 7:
+        c = _r.randint(low, high)
+        if c not in s:
+            s.append(c)
+    return sorted(s[:7])
+
+def _odd_count(nums: NumberSet) -> int:
+    return sum(1 for n in nums if n % 2 != 0)
+
+def _min_gap(nums: NumberSet) -> int:
+    nums = sorted(nums)
+    if len(nums) < 2: return 0
+    return min(nums[i + 1] - nums[i] for i in range(len(nums) - 1))
+
+def _range(nums: NumberSet) -> int:
+    return max(nums) - min(nums)
+
+def _within(v: float, lo: float, hi: float) -> float:
+    if lo <= v <= hi: return 1.0
+    d = min(abs(v - lo), abs(v - hi))
+    width = max(1e-6, hi - lo)
+    return max(0.0, 1.0 - d / width)
+
+def constraint_score(nums: NumberSet, cfg: ConstraintConfig) -> float:
+    oc = _odd_count(nums)
+    total = sum(nums)
+    mg = _min_gap(nums)
+    rg = _range(nums)
+    s = 0.25 * _within(oc, cfg.odd_min, cfg.odd_max)
+    s += 0.35 * _within(total, cfg.sum_min, cfg.sum_max)
+    s += 0.20 * _within(mg, cfg.min_gap, 37)
+    s += 0.20 * _within(rg, cfg.min_range, 37)
+    return float(s)
+
+def number_frequencies(historical_df) -> Dict[int, float]:
+    counts = {i: 0 for i in range(1, 38)}
+    col_candidates = ["本数字", "numbers", "winning_numbers"]
+    col = None
+    for c in col_candidates:
+        if hasattr(historical_df, "columns") and c in getattr(historical_df, "columns", []):
+            col = c; break
+    if col is None:
+        return counts
+    for row in historical_df[col]:
+        if isinstance(row, (list, tuple)):
+            for n in row:
+                if 1 <= int(n) <= 37:
+                    counts[int(n)] += 1
+    total = sum(counts.values()) or 1
+    return {k: v / total for k, v in counts.items()}
+
+def pair_triple_frequencies(historical_df):
+    pair_freq: Dict[Tuple[int, int], int] = {}
+    triple_freq: Dict[Tuple[int, int, int], int] = {}
+    col_candidates = ["本数字", "numbers", "winning_numbers"]
+    col = None
+    for c in col_candidates:
+        if hasattr(historical_df, "columns") and c in getattr(historical_df, "columns", []):
+            col = c; break
+    if col is None: return pair_freq, triple_freq
+    for nums in historical_df[col]:
+        if not isinstance(nums, (list, tuple)): continue
+        s = sorted(int(x) for x in nums)
+        for i in range(len(s)):
+            for j in range(i + 1, len(s)):
+                p = (s[i], s[j]); pair_freq[p] = pair_freq.get(p, 0) + 1
+        for i in range(len(s)):
+            for j in range(i + 1, len(s)):
+                for k in range(j + 1, len(s)):
+                    t = (s[i], s[j], s[k]); triple_freq[t] = triple_freq.get(t, 0) + 1
+    return pair_freq, triple_freq
+
+def cooccurrence_score(nums: NumberSet, pair_freq, triple_freq) -> float:
+    s = sorted(nums)
+    pf_sum = 0; tf_sum = 0
+    for i in range(7):
+        for j in range(i + 1, 7):
+            pf_sum += pair_freq.get((s[i], s[j]), 0)
+    for i in range(7):
+        for j in range(i + 1, 7):
+            for k in range(j + 1, 7):
+                tf_sum += triple_freq.get((s[i], s[j], s[k]), 0)
+    return float(1.0 - math.exp(-0.002 * (pf_sum + 0.5 * tf_sum)))
+
+def diversity_penalty(nums: NumberSet, others: List[NumberSet]) -> float:
+    if not others: return 0.0
+    s = set(nums)
+    inters = [len(s & set(o)) for o in others]
+    return min(1.0, (sum(inters) / len(inters)) / 7.0)
+
+class EvolutionEngine:
+    def __init__(self, cfg: ConstraintConfig, num_low: int = 1, num_high: int = 37):
+        self.cfg = cfg; self.low = num_low; self.high = num_high
+
+    def _fitness(self, cand, hist_df, pair_freq, triple_freq, others=None) -> float:
+        cscore = constraint_score(cand, self.cfg)
+        co = cooccurrence_score(cand, pair_freq, triple_freq)
+        div_pen = diversity_penalty(cand, others or [])
+        return float(0.55 * cscore + 0.45 * co - 0.25 * div_pen)
+
+    def _crossover(self, a, b):
+        import random as _r
+        k = _r.randint(3, 4); part = set(_r.sample(a, k))
+        child = list(part)
+        for x in b:
+            if len(child) >= 7: break
+            if x not in part: child.append(x)
+        return _ensure_valid(child, self.low, self.high)
+
+    def _mutate(self, x, num_freq: Dict[int, float]):
+        import numpy as _np, random as _r
+        y = x[:]; m = _r.randint(1, 2); pool = list(range(self.low, self.high + 1))
+        for _ in range(m):
+            idx = _r.randrange(7)
+            weights = _np.array([num_freq.get(i, 1e-6) for i in pool], dtype=float)
+            weights = weights / (weights.sum() or 1)
+            cand = int(_np.random.choice(pool, p=weights))
+            y[idx] = cand
+        return _ensure_valid(y, self.low, self.high)
+
+    def search(self, seed_population, hist_df, generations=40, pop_size=120, elite=12):
+        import numpy as _np, random as _r
+        set_global_seed(777)
+        elite = max(1, min(elite, pop_size - 1))
+        num_freq = number_frequencies(hist_df)
+        pair_freq, triple_freq = pair_triple_frequencies(hist_df)
+
+        pop: List[NumberSet] = []
+        pop.extend(_ensure_valid(s) for s in seed_population)
+        pool = list(range(self.low, self.high + 1))
+        weights = _np.array([num_freq.get(i, 1e-6) for i in pool], dtype=float)
+        weights = weights / (weights.sum() or 1)
+        while len(pop) < pop_size:
+            cand = list(_np.random.choice(pool, size=7, replace=False, p=weights))
+            pop.append(_ensure_valid(cand, self.low, self.high))
+        pop = pop[:pop_size]
+
+        for _gen in range(generations):
+            scores = [self._fitness(ind, hist_df, pair_freq, triple_freq, others=pop) for ind in pop]
+            idxs = _np.argsort(scores)[::-1]
+            elites = [pop[i] for i in idxs[:elite]]
+
+            parents: List[NumberSet] = []
+            target_children = pop_size - elite
+            N = len(pop)
+            while len(parents) < target_children:
+                t = _r.sample(range(N), k=min(4, N))
+                best = max(t, key=lambda i: scores[i]); parents.append(pop[best])
+                t2 = _r.sample(range(N), k=min(4, N))
+                best2 = max(t2, key=lambda i: scores[i]); parents.append(pop[best2])
+
+            children: List[NumberSet] = []
+            i = 0
+            while len(children) < target_children:
+                a = parents[i % len(parents)]; b = parents[(i + 1) % len(parents)]
+                child = self._crossover(a, b)
+                if i % 1 == 0:
+                    child = self._mutate(child, num_freq)
+                children.append(child); i += 2
+
+            pop = elites + children
+            if len(pop) > pop_size: pop = pop[:pop_size]
+
+        final_scores = [self._fitness(ind, hist_df, pair_freq, triple_freq, others=[]) for ind in pop]
+        order = _np.argsort(final_scores)[::-1]
+        return [pop[i] for i in order]
+
+class ConditionalSampler:
+    def __init__(self, cfg: ConstraintConfig, alpha=0.60, beta=0.30, gamma=0.10):
+        self.cfg = cfg; self.alpha = alpha; self.beta = beta; self.gamma = gamma
+        self.freq_uni: Dict[int, float] = {}
+        self.freq_pair: Dict[Tuple[int, int], int] = {}
+        self.freq_tri: Dict[Tuple[int, int, int], int] = {}
+
+    def _energy(self, nums: NumberSet) -> float:
+        cons = constraint_score(nums, self.cfg); e_cons = 1.0 - cons
+        s = sorted(nums)
+        pf = tf = 0.0; cntp = cntt = 0
+        for i in range(7):
+            for j in range(i + 1, 7):
+                pf += math.log1p(self.freq_pair.get((s[i], s[j]), 0)); cntp += 1
+        for i in range(7):
+            for j in range(i + 1, 7):
+                for k in range(j + 1, 7):
+                    tf += math.log1p(self.freq_tri.get((s[i], s[j], s[k]), 0)); cntt += 1
+        if cntp > 0: pf /= cntp
+        if cntt > 0: tf /= cntt
+        co_norm = 1.0 - math.exp(-(pf + 0.6 * tf)); e_co = 1.0 - co_norm
+        fu = np.mean([self.freq_uni.get(int(x), 1e-9) for x in s])
+        fu_norm = min(1.0, max(0.0, fu * 50.0)); e_uni = 1.0 - fu_norm
+        return float(self.alpha * e_cons + self.beta * e_co + self.gamma * e_uni)
+
+    def _propose(self, nums: NumberSet) -> NumberSet:
+        import random as _r
+        s = set(nums); mode = _r.random()
+        if mode < 0.34:
+            victim = _r.choice(nums); pool = [x for x in range(self.cfg.low, self.cfg.high + 1) if x not in s or x == victim]
+            cand = _r.choice(pool); t = nums[:]; t[t.index(victim)] = cand; return _ensure_valid(t, self.cfg.low, self.cfg.high)
+        elif mode < 0.67:
+            i, j = _r.sample(range(7), 2); t = nums[:]; t[i], t[j] = t[j], t[i]; return _ensure_valid(t, self.cfg.low, self.cfg.high)
+        else:
+            i = _r.randrange(7); step = _r.choice([-3, -2, -1, 1, 2, 3]); val = min(self.cfg.high, max(self.cfg.low, nums[i] + step))
+            t = nums[:]; t[i] = val; return _ensure_valid(t, self.cfg.low, self.cfg.high)
+
+    def _init_candidate(self, historical_df=None) -> NumberSet:
+        import numpy as _np, random as _r
+        pool = list(range(self.cfg.low, self.cfg.high + 1))
+        w = _np.array([self.freq_uni.get(i, 1e-9) for i in pool], dtype=float)
+        if not _np.isfinite(w.sum()) or w.sum() <= 0:
+            cand = _r.sample(pool, 7)
+        else:
+            w = w / w.sum(); cand = list(_np.random.choice(pool, size=7, replace=False, p=w))
+        return _ensure_valid(cand, self.cfg.low, self.cfg.high)
+
+    def sample_with_constraints(self, base_predictor, hist_df, n_samples=120, accept_threshold=0.75, max_steps=1200, T_start=1.2, T_end=0.02) -> List[NumberSet]:
+        self.freq_uni = number_frequencies(hist_df)
+        self.freq_pair, self.freq_tri = pair_triple_frequencies(hist_df)
+        out: List[NumberSet] = []; seen: set[Tuple[int, ...]] = set()
+        def temp(t): r = t / max(1, max_steps - 1); return T_start * (T_end / T_start) ** r
+        trials = 0; max_trials = n_samples * 30
+        import random as _r, math as _m
+        while len(out) < n_samples and trials < max_trials:
+            trials += 1; cur = self._init_candidate(hist_df); E = self._energy(cur)
+            for step in range(max_steps):
+                T = temp(step); prop = self._propose(cur); Ep = self._energy(prop); dE = Ep - E
+                if dE <= 0 or _r.random() < _m.exp(-dE / max(1e-8, T)):
+                    cur, E = prop, Ep
+            if constraint_score(cur, self.cfg) >= accept_threshold:
+                key = tuple(sorted(cur))
+                if key not in seen: seen.add(key); out.append(sorted(cur))
+        while len(out) < n_samples:
+            out.append(sorted(self._init_candidate(hist_df)))
+        return out
+
+class LimitBreakPredictor:
+    def __init__(self, cfg: Optional[ConstraintConfig] = None):
+        self.cfg = cfg or ConstraintConfig()
+        self.sampler = ConditionalSampler(self.cfg)
+        self.engine = EvolutionEngine(self.cfg)
+
+    def limit_break_predict(self, latest_data, n_out=50, ga_generations=42, ga_pop_size=160, sampler_n=120, target_date: Optional[object] = None) -> List[PredWithScore]:
+        set_global_seed(20250819)
+        # Work with pandas DataFrame if provided
+        history_df = latest_data
+        try:
+            import pandas as pd
+            if hasattr(latest_data, "copy"):
+                latest_data = latest_data.copy()
+            if hasattr(latest_data, "columns") and "抽せん日" in getattr(latest_data, "columns", []):
+                latest_data["抽せん日"] = pd.to_datetime(latest_data["抽せん日"], errors="coerce")
+                if target_date is None:
+                    target_date = latest_data["抽せん日"].max() if not latest_data.empty else None
+                history_df = latest_data[latest_data["抽せん日"] < target_date] if target_date is not None else latest_data
+                if history_df.empty:
+                    history_df = latest_data.iloc[:-1].copy()
+        except Exception:
+            pass
+
+        # seed candidates (optional: could mix in outputs of your base predictor)
+        seed_candidates: List[NumberSet] = []
+
+        # conditional samples + GA evolution
+        cond_samples = self.sampler.sample_with_constraints(None, history_df, n_samples=sampler_n, accept_threshold=0.75)
+        seed_all = seed_candidates + cond_samples
+        evolved = self.engine.search(seed_population=seed_all, hist_df=history_df, generations=ga_generations, pop_size=ga_pop_size, elite=max(ga_pop_size // 12, 8))
+
+        pair_freq, triple_freq = pair_triple_frequencies(history_df)
+        scored: List[PredWithScore] = []
+        for c in evolved:
+            cscore = constraint_score(c, self.cfg)
+            co = cooccurrence_score(c, pair_freq, triple_freq)
+            final = 0.6 * cscore + 0.4 * co
+            conf = 0.75 + 0.40 * final
+            scored.append((c, float(conf)))
+
+        uniq: Dict[Tuple[int, ...], float] = {}
+        for nums, conf in scored:
+            key = tuple(nums)
+            uniq[key] = max(uniq.get(key, 0.0), conf)
+
+        final = sorted(uniq.items(), key=lambda x: x[1], reverse=True)[:n_out]
+        return [(list(k), v) for k, v in final]
+
+# ---- Public helper to merge base predictions with LimitBreak ----
+def merge_with_limitbreak(base_predictions, base_confidences, latest_data, topk=50):
+    """
+    Parameters
+    ----------
+    base_predictions : List[List[int]] or None
+    base_confidences : List[float] or None
+    latest_data      : pandas.DataFrame (or equivalent)
+    topk             : int
+
+    Returns
+    -------
+    merged : List[Tuple[List[int], float]]
+    """
+    # Normalize base
+    base = []
+    if base_predictions is not None and base_confidences is not None:
+        for nums, conf in zip(base_predictions, base_confidences):
+            try:
+                key = tuple(sorted(int(x) for x in nums))
+                base.append((list(key), float(conf)))
+            except Exception:
+                continue
+
+    # LimitBreak predictions
+    lbp = LimitBreakPredictor()
+    lb_preds = lbp.limit_break_predict(latest_data, n_out=max(topk, 50))
+
+    # Merge by max confidence
+    seen = {}
+    for nums, conf in base + lb_preds:
+        key = tuple(sorted(int(x) for x in nums))
+        seen[key] = max(seen.get(key, 0.0), float(conf))
+    merged = sorted(((list(k), v) for k, v in seen.items()), key=lambda x: x[1], reverse=True)
+    return merged[:topk]
+
+# Optional CLI hook
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Lottery predictions with LimitBreak integration")
+    parser.add_argument("--mode", default="base+lb", choices=["base+lb", "lb-only"], help="Integration mode")
+    parser.add_argument("--topk", type=int, default=50)
+    parser.add_argument("--csv", type=str, default=None, help="Path to CSV of historical draws (must include 抽せん日 and 本数字 columns)")
+    args, _ = parser.parse_known_args()
+
+    try:
+        import pandas as pd
+        if args.csv and os.path.exists(args.csv):
+            df = pd.read_csv(args.csv)
+        else:
+            raise FileNotFoundError("CSV not provided; lb-only mode requires --csv")
+        if args.mode == "lb-only":
+            preds = LimitBreakPredictor().limit_break_predict(df, n_out=args.topk)
+            for p, c in preds:
+                print(p, round(c, 4))
+        else:
+            # base is empty in this standalone runner; demonstrates merge API
+            merged = merge_with_limitbreak([], [], df, topk=args.topk)
+            for p, c in merged:
+                print(p, round(c, 4))
+    except Exception as e:
+        print("[LimitBreak integration runner]", repr(e))
+# ============================================================================
