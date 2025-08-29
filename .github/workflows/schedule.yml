@@ -13,6 +13,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # === Go vendor キャッシュ ===
+      - name: Cache vendor
+        uses: actions/cache@v3
+        with:
+          path: vendor
+          key: go-vendor-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-vendor-
+            go-
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
