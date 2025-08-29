@@ -133,7 +133,7 @@ elif "予測評価" in menu:
         try:
             # 任意: あなたの評価ロジックに合わせて修正してください
             # 例: numbers3_predictor モジュールの関数を呼ぶ
-            from numbers3_predictor import evaluate_and_summarize_predictions  # 無ければ except へ
+            from loto7_predictor import evaluate_and_summarize_predictions  # 無ければ except へ
             with st.spinner("評価中..."):
                 evaluate_and_summarize_predictions(
                     output_csv=str(EVAL_CSV),
