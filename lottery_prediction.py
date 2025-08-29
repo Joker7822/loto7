@@ -956,7 +956,7 @@ class LotoPredictor:
 
         if X is None or len(X) == 0:
             print("[ERROR] 予測用データが空です")
-            return None, None
+            return [], []
 
         print(f"[DEBUG] 予測用データの shape: {X.shape}")
 
@@ -1134,6 +1134,24 @@ class LotoPredictor:
             traceback.print_exc()
             return numbers_only, confidence_scores
         
+        # --- Ensure tuple return even on success paths ---
+        try:
+            if 'numbers_only' in locals() and 'confidence_scores' in locals():
+                return numbers_only, confidence_scores
+            elif 'all_predictions' in locals() and all_predictions:
+                _nums, _confs = [], []
+                for _p in all_predictions:
+                    if isinstance(_p, (list, tuple)) and len(_p) >= 2:
+                        _nums.append(_p[0])
+                        _confs.append(_p[1])
+                    else:
+                        _nums.append(_p)
+                        _confs.append(0.0)
+                return _nums, _confs
+            else:
+                return [], []
+        except Exception:
+            return [], []
 def evaluate_predictions(predictions, actual_numbers):
     matches = []
     for pred in predictions:
