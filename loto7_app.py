@@ -16,7 +16,7 @@ SCRAPING_LOG = APP_DIR / "scraping_log.txt"
 
 PRED_CSV = APP_DIR / "loto7_predictions.csv"     # 予測CSV（例）
 EVAL_CSV = APP_DIR / "loto7_prediction_evaluation_with_bonus.csv"     # 評価結果CSV（統一）
-EVAL_SUMMARY = APP_DIR / "evaluation_summary.txt"
+EVAL_SUMMARY = APP_DIR / "loto7_evaluation_summary.txt"
 PROGRESS_TXT = APP_DIR / "progress_dashboard.txt"
 
 # ========= 時刻（JST） =========
