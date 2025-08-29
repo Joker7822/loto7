@@ -1076,7 +1076,7 @@ class LotoPredictor:
             traceback.print_exc()
             return numbers_only, confidence_scores
             
-                try:
+        try:
             numbers_only = _stable_diverse_selection(
                 numbers_only, confidence_scores, latest_data,
                 k=30, lambda_div=0.6, temperature=0.35
