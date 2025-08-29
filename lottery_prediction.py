@@ -1,3 +1,47 @@
+def _stable_diverse_selection(numbers_only, confidence_scores, latest_data,
+                            k=30, lambda_div=0.6, temperature=0.35):
+    import hashlib, numpy as np, pandas as pd
+    # 1) 安定シード（抽せん日で決定）
+    if isinstance(latest_data, pd.DataFrame) and "抽せん日" in latest_data.columns:
+        td = str(pd.to_datetime(latest_data["抽せん日"].max()).date())
+    else:
+        td = "unknown"
+    seed = int(hashlib.md5(td.encode()).hexdigest()[:8], 16)
+    set_global_seed(seed)
+
+    # 2) マージナル確率
+    conf = np.array(confidence_scores, dtype=float)
+    conf = (conf - conf.min()) / (conf.max() - conf.min() + 1e-9)
+    weights = np.exp(conf / max(1e-6, temperature))
+    weights = weights / (weights.sum() + 1e-9)
+
+    marg = np.zeros(37)
+    for cand, w in zip(numbers_only, weights):
+        for n in cand:
+            marg[n-1] += w
+    marg = marg / (marg.sum() + 1e-9)
+
+    base_scores = [sum(np.log(marg[n-1] + 1e-9) for n in cand) for cand in numbers_only]
+
+    # 3) Greedy多様化（Jaccardペナルティ）
+    selected, used = [], set()
+    for _ in range(min(k, len(numbers_only))):
+        best_i, best_val = None, -1e12
+        for i, cand in enumerate(numbers_only):
+            if i in used:
+                continue
+            penalty = 0.0
+            for s in selected:
+                inter = len(set(cand) & set(s))
+                union = len(set(cand) | set(s))
+                penalty += inter / union
+            val = base_scores[i] - lambda_div * penalty
+            if val > best_val:
+                best_val, best_i = val, i
+        used.add(best_i)
+        selected.append(numbers_only[best_i])
+    return selected
+
 
 # === Optunaで最適化されたパラメータの読み込み ===
 import os
@@ -1076,6 +1120,7 @@ class LotoPredictor:
             traceback.print_exc()
             return numbers_only, confidence_scores
             
+
         try:
             numbers_only = _stable_diverse_selection(
                 numbers_only, confidence_scores, latest_data,
@@ -1838,51 +1883,6 @@ def log_prediction_summary(evaluation_df, log_path="prediction_accuracy_log.txt"
 import csv
 from datetime import datetime
 import subprocess
-
-def _stable_diverse_selection(numbers_only, confidence_scores, latest_data,
-                                    k=30, lambda_div=0.6, temperature=0.35):
-            import hashlib, numpy as np, pandas as pd
-            # 1) 安定シード（抽せん日で決定）
-            if isinstance(latest_data, pd.DataFrame) and "抽せん日" in latest_data.columns:
-                td = str(pd.to_datetime(latest_data["抽せん日"].max()).date())
-            else:
-                td = "unknown"
-            seed = int(hashlib.md5(td.encode()).hexdigest()[:8], 16)
-            set_global_seed(seed)
-
-            # 2) マージナル確率
-            conf = np.array(confidence_scores, dtype=float)
-            conf = (conf - conf.min()) / (conf.max() - conf.min() + 1e-9)
-            weights = np.exp(conf / max(1e-6, temperature))
-            weights = weights / (weights.sum() + 1e-9)
-
-            marg = np.zeros(37)
-            for cand, w in zip(numbers_only, weights):
-                for n in cand:
-                    marg[n-1] += w
-            marg = marg / (marg.sum() + 1e-9)
-
-            base_scores = [sum(np.log(marg[n-1] + 1e-9) for n in cand) for cand in numbers_only]
-
-            # 3) Greedy多様化（Jaccardペナルティ）
-            selected, used = [], set()
-            for _ in range(min(k, len(numbers_only))):
-                best_i, best_val = None, -1e12
-                for i, cand in enumerate(numbers_only):
-                    if i in used:
-                        continue
-                    penalty = 0.0
-                    for s in selected:
-                        inter = len(set(cand) & set(s))
-                        union = len(set(cand) | set(s))
-                        penalty += inter / union
-                    val = base_scores[i] - lambda_div * penalty
-                    if val > best_val:
-                        best_val, best_i = val, i
-                used.add(best_i)
-                selected.append(numbers_only[best_i])
-            return selected
-
 
 
 def _get_git_head():
