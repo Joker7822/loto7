@@ -13,48 +13,73 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # === Go vendor キャッシュ ===
-      - name: Cache vendor
-        uses: actions/cache@v3
-        with:
-          path: vendor
-          key: go-vendor-${{ hashFiles('go.sum') }}
-          restore-keys: |
-            go-vendor-
-            go-
+      # ❶ まずは空き容量を確保
+      - name: Free disk space (dotnet/ghc/boost/toolcache etc.)
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet \
+                       /opt/ghc \
+                       "/usr/local/share/boost" \
+                       "$AGENT_TOOLSDIRECTORY" \
+                       /usr/local/lib/android \
+                       /usr/local/.ghcup \
+                       /usr/local/share/chromium
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          df -h
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          # 依存を再利用したい場合は有効化。ただし容量が厳しければオフのままでもOK
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements_core.txt
+            requirements_heavy.txt
 
+      # ❷ 必要ライブラリ＋Headless Chrome/Driver を最小限で入れる（zipはすぐ削除）
       - name: Install dependencies and headless Chrome
+        env:
+          CHROME_VER: "138.0.7204.92"
         run: |
-          sudo apt update
-          sudo apt install -y wget unzip xvfb \
+          sudo apt-get update
+          sudo apt-get install -y wget unzip xvfb \
             libglib2.0-0 libnss3 libxi6 libxcomposite1 libxss1 \
             libatk-bridge2.0-0 libgtk-3-0 libasound2t64
-
-          # Install Chrome 138
-          wget https://storage.googleapis.com/chrome-for-testing-public/138.0.7204.92/linux64/chrome-linux64.zip
-          unzip chrome-linux64.zip
+          # Chrome
+          wget https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VER}/linux64/chrome-linux64.zip -O chrome.zip
+          unzip chrome.zip
           sudo mv chrome-linux64 /opt/chrome
           sudo ln -sf /opt/chrome/chrome /usr/bin/google-chrome
-
-          # Install ChromeDriver 138
-          wget https://storage.googleapis.com/chrome-for-testing-public/138.0.7204.92/linux64/chromedriver-linux64.zip
-          unzip chromedriver-linux64.zip
+          rm -f chrome.zip
+          # ChromeDriver
+          wget https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VER}/linux64/chromedriver-linux64.zip -O chromedriver.zip
+          unzip chromedriver.zip
           sudo mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
           sudo chmod +x /usr/local/bin/chromedriver
+          rm -rf chromedriver.zip chromedriver-linux64
+          # apt キャッシュも掃除
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
 
+      # ❸ pip は安定版に固定（ビルドログを短く）
       - name: Downgrade pip to stable version
-        run: python -m pip install pip==23.3.1
+        run: python -m pip install --upgrade pip==23.3.1
 
+      # ❹ 依存インストール（キャッシュ不使用・ビルドキャッシュを残さない）
       - name: Install core dependencies
-        run: pip install -r requirements_core.txt
+        run: pip install --no-cache-dir -r requirements_core.txt
 
       - name: Install heavy dependencies
-        run: pip install -r requirements_heavy.txt
+        run: pip install --no-cache-dir -r requirements_heavy.txt
+
+      # ❺ pip/pytest 等の残骸や wheel を掃除（容量の最終確保）
+      - name: Purge caches after install
+        run: |
+          python -m pip cache purge || true
+          rm -rf ~/.cache/pip || true
+          df -h
 
       - name: Run scraping script
         run: xvfb-run -a python scrapingloto7.py
@@ -65,16 +90,13 @@ jobs:
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}
           git fetch origin
           git stash --include-untracked
           git checkout ${{ github.ref_name }}
           git pull --rebase origin ${{ github.ref_name }}
           git stash pop || true
-
           git add loto7.csv
-
           if git diff --cached --quiet; then
             echo "No changes to loto7.csv"
           else
@@ -91,19 +113,16 @@ jobs:
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}
           git fetch origin
           git stash --include-untracked
           git checkout ${{ github.ref_name }}
           git pull --rebase origin ${{ github.ref_name }}
           git stash pop || true
-
           git add loto7_predictions.csv \
                   loto7_prediction_evaluation_with_bonus.csv \
                   loto7_evaluation_summary.txt \
                   self_predictions.csv
-
           if git diff --cached --quiet; then
             echo "No prediction result changes"
           else
