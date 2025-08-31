@@ -76,7 +76,7 @@ st.markdown("<h1 style='color:#FF4B4B;'>🎯 Loto7 予測AI</h1>", unsafe_allow_
 
 menu = st.sidebar.radio(
     "📌 メニュー",
-    ["🧠 最新予測表示", "📊 予測評価", "📉 予測分析グラフ", "🧾 予測結果表示"]
+    ["🧠 最新予測表示", "📊 予測評価", "🧾 予測結果表示"]
 )
 
 # ========= 画面: 最新予測表示 =========
@@ -163,31 +163,6 @@ elif "予測評価" in menu:
         st.dataframe(eval_df, use_container_width=True)
     else:
         st.info("評価結果CSVが未読込です。実行するかアップロードしてください。")
-
-# ========= 画面: 予測分析グラフ（簡易テキスト表示版） =========
-elif "分析グラフ" in menu:
-    st.markdown("## 📉 予測の分析グラフ（テキストダッシュボード）")
-
-    eval_df = safe_read_csv(EVAL_CSV, "eval_uploader_graph", "評価結果CSV")
-    if isinstance(eval_df, pd.DataFrame) and not eval_df.empty:
-        st.info("📊 月別収益・直近成績をテキストで表示します。")
-        try:
-            # 例: ダッシュボード生成（存在しない場合も握りつぶす）
-            from numbers3_predictor import generate_progress_dashboard_text
-            generate_progress_dashboard_text(output_path=str(PROGRESS_TXT))
-        except Exception:
-            pass
-
-        if PROGRESS_TXT.exists():
-            try:
-                dashboard_text = PROGRESS_TXT.read_text(encoding="utf-8")
-                st.text_area("📈 成績ダッシュボード", dashboard_text, height=420)
-            except Exception as e:
-                st.error(f"❌ ダッシュボード読み込みエラー: {e}")
-        else:
-            st.warning("⚠️ progress_dashboard.txt が見つかりません。生成関数が無い/未実行の可能性があります。")
-    else:
-        st.warning("⚠️ 先に評価結果CSVを用意してください。")
 
 # ========= 画面: 予測結果表示（一覧） =========
 elif "予測結果" in menu:
