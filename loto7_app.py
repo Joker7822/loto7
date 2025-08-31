@@ -131,9 +131,7 @@ elif "予測評価" in menu:
 
     if run_eval:
         try:
-            # 任意: あなたの評価ロジックに合わせて修正してください
-            # 例: numbers3_predictor モジュールの関数を呼ぶ
-            from loto7_predictor import evaluate_and_summarize_predictions  # 無ければ except へ
+            from loto7_predictor import evaluate_prediction_accuracy_with_bonus  # 無ければ except へ
             with st.spinner("評価中..."):
                 evaluate_and_summarize_predictions(
                     output_csv=str(EVAL_CSV),
@@ -144,7 +142,7 @@ elif "予測評価" in menu:
         except ModuleNotFoundError:
             st.info("ℹ️ 評価ロジックのモジュールが見つかりませんでした。手動でCSVをアップロードして確認できます。")
         except NameError:
-            st.info("ℹ️ evaluate_and_summarize_predictions が未定義です。")
+            st.info("ℹ️ evaluate_prediction_accuracy_with_bonus が未定義です。")
         except Exception as e:
             st.error(f"❌ 評価中にエラー: {e}")
 
