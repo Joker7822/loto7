@@ -96,8 +96,8 @@ jobs:
           fi
 
       - name: Run predictor script
-        run: xvfb-run -a python lottery_prediction.py
-
+        run: xvfb-run -a python predict_latest_topk_improved.py
+        
       - name: Commit and push prediction results if changed
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
