@@ -110,7 +110,7 @@ jobs:
           git checkout ${{ github.ref_name }}
           git pull --rebase origin ${{ github.ref_name }}
           git stash pop || true
-          git add loto7_predictions.csv \
+          git add loto7_predictions_improved.csv \
                   loto7_prediction_evaluation_with_bonus.csv \
                   loto7_evaluation_summary.txt \
                   self_predictions.csv
