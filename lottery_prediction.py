@@ -1116,6 +1116,10 @@ class LotoPredictor:
             )
             confidence_scores = confidence_scores[:len(numbers_only)]
 
+            # === 最終“似すぎ除外”フィルタ ===
+            numbers_only = enforce_final_diversity(numbers_only, max_sim=4/7)
+            confidence_scores = confidence_scores[:len(numbers_only)]
+
         except Exception as e:
             print(f"[ERROR] 予測中にエラー発生: {e}")
             traceback.print_exc()
@@ -1127,6 +1131,10 @@ class LotoPredictor:
                 numbers_only, confidence_scores, latest_data,
                 k=30, lambda_div=0.6, temperature=0.35
             )
+            confidence_scores = confidence_scores[:len(numbers_only)]
+
+            # === 最終“似すぎ除外”フィルタ ===
+            numbers_only = enforce_final_diversity(numbers_only, max_sim=4/7)
             confidence_scores = confidence_scores[:len(numbers_only)]
 
         except Exception as e:
@@ -2055,3 +2063,25 @@ def evaluate_prediction_accuracy_with_bonus_compat(*args, **kwargs):
     if results_file is None:
         results_file = "loto7.csv"
     return evaluate_prediction_accuracy_with_bonus(predictions_file, results_file)
+
+
+
+def _jaccard(a, b):
+    sa, sb = set(a), set(b)
+    inter = len(sa & sb)
+    union = len(sa | sb)
+    return inter / union if union else 0.0
+
+def enforce_final_diversity(candidates, max_sim=4/7):
+    """
+    最終TopK前に“似すぎ”候補を間引く。
+    - candidates: [list[int] or np.ndarray shape=(7,)]
+    - max_sim: Jaccard類似度の上限。4/7≈0.571…を既定
+    返り値: フィルタ後の candidates（順序は元の並びを尊重）
+    """
+    kept = []
+    for cand in candidates:
+        cand7 = list(map(int, cand))
+        if all(_jaccard(cand7, k) <= max_sim for k in kept):
+            kept.append(cand7)
+    return kept
