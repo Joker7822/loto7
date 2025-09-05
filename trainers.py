@@ -10,11 +10,6 @@ from early_stopping import EarlyStopping, EarlyStopConfig
 
 def train_lstm_with_early_stopping(model, X, y, *, max_epochs=200, batch_size=64, val_ratio=0.2,
                                    lr=1e-3, patience=12, device=None):
-    """
-    汎用 LSTM (任意の nn.Module) を対象に、検証損失の早期終了を実装。
-    X: torch.FloatTensor shape [N, 1, input_size]
-    y: torch.FloatTensor shape [N, 7]
-    """
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     ds = TensorDataset(X, y)
@@ -29,7 +24,6 @@ def train_lstm_with_early_stopping(model, X, y, *, max_epochs=200, batch_size=64
     scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
     es = EarlyStopping(EarlyStopConfig(patience=patience, min_delta=1e-4, mode="min", restore_best=True))
 
-    best_val = float("inf")
     for epoch in range(1, max_epochs+1):
         model.train()
         total = 0.0
@@ -45,7 +39,6 @@ def train_lstm_with_early_stopping(model, X, y, *, max_epochs=200, batch_size=64
             total += loss.item()
         train_loss = total / max(1, len(train_loader))
 
-        # validation
         model.eval()
         vtotal = 0.0
         with torch.no_grad():
@@ -55,19 +48,14 @@ def train_lstm_with_early_stopping(model, X, y, *, max_epochs=200, batch_size=64
                 vloss = criterion(out, by)
                 vtotal += vloss.item()
         val_loss = vtotal / max(1, len(val_loader))
-
         print(f"[LSTM][Epoch {epoch}] train={train_loss:.4f} val={val_loss:.4f}")
         if es.step(val_loss, model):
             print(f"[LSTM] Early stopped at epoch {epoch}. Best val={es.best:.4f}")
             break
-
     return model
 
 def train_gan_with_early_stopping(gan, real_data_tensor, *, max_epochs=3000, batch_size=32,
                                   lr=1e-3, patience=10, device=None, print_every=200):
-    """
-    生成器の目的関数（Gの損失）に対して早期終了。一定エポック改善がなければ停止。
-    """
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     gan.generator.to(device)
     gan.discriminator.to(device)
@@ -75,7 +63,6 @@ def train_gan_with_early_stopping(gan, real_data_tensor, *, max_epochs=3000, bat
     optimizer_G = optim.Adam(gan.generator.parameters(), lr=lr)
     optimizer_D = optim.Adam(gan.discriminator.parameters(), lr=lr)
     criterion = nn.BCELoss()
-
     es = EarlyStopping(EarlyStopConfig(patience=patience, min_delta=1e-4, mode="min", restore_best=True))
 
     n = real_data_tensor.size(0)
@@ -86,7 +73,6 @@ def train_gan_with_early_stopping(gan, real_data_tensor, *, max_epochs=3000, bat
         idx = torch.randint(0, n, (batch_size,))
         real_batch = real_data_tensor[idx].to(device)
 
-        # --- Train D ---
         noise = torch.randn(batch_size, gan.noise_dim, device=device)
         fake_batch = gan.generator(noise).detach()
 
@@ -97,7 +83,6 @@ def train_gan_with_early_stopping(gan, real_data_tensor, *, max_epochs=3000, bat
         d_loss.backward()
         optimizer_D.step()
 
-        # --- Train G ---
         optimizer_G.zero_grad(set_to_none=True)
         noise = torch.randn(batch_size, gan.noise_dim, device=device)
         fake = gan.generator(noise)
@@ -108,9 +93,7 @@ def train_gan_with_early_stopping(gan, real_data_tensor, *, max_epochs=3000, bat
         if epoch % print_every == 0:
             print(f"[GAN][Epoch {epoch}] D={d_loss.item():.4f} G={g_loss.item():.4f}")
 
-        # early stop on generator loss
         if es.step(float(g_loss.item()), gan.generator):
             print(f"[GAN] Early stopped at epoch {epoch}. Best G loss={es.best:.4f}")
             break
-
     return gan

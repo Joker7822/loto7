@@ -8,7 +8,7 @@ from dataclasses import dataclass
 class EarlyStopConfig:
     patience: int = 10
     min_delta: float = 1e-4
-    mode: str = "min"   # "min" or "max"
+    mode: str = "min"
     restore_best: bool = True
 
 class EarlyStopping:
@@ -29,15 +29,11 @@ class EarlyStopping:
             return (score - self.best) > self.cfg.min_delta
 
     def step(self, score: float, model=None) -> bool:
-        """
-        Return True if should stop.
-        """
         if self._is_better(score):
             self.best = score
             self.counter = 0
             if self.cfg.restore_best and model is not None:
                 try:
-                    # state_dict がある PyTorch モデルのみ対象
                     self.best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
                 except Exception:
                     self.best_state = None
