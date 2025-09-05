@@ -1,60 +1,41 @@
 --- lottery_prediction.py
-+++ lottery_prediction_improved.py
-@@ -62,6 +62,14 @@
- import requests
- from bs4 import BeautifulSoup
- import pandas as pd
-+
-+# === Added by debias/early-stopping integration ===
-+from features import preprocess_data_fast as preprocess_data, create_advanced_features_fast as create_advanced_features
-+from trainers import train_lstm_with_early_stopping, train_gan_with_early_stopping
-+from bnn_diffusion_es import train_diffusion_with_es
-+from debias import softmax_no_replace, stable_diverse_selection_balanced
-+# === End added ===
-+
- import numpy as np
- 
- 
-@@ -775,7 +783,7 @@
-         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-         X_train_tensor = torch.tensor(X_train.reshape(-1, 1, input_size), dtype=torch.float32).to(device)
-         y_train_tensor = torch.tensor(y_train, dtype=torch.float32).to(device)
--        self.lstm_model = train_lstm_model(X_train_tensor, y_train_tensor, input_size, device=device)
-+        self.lstm_model = train_lstm_with_early_stopping(self.lstm_model, X_train_tensor, y_train_tensor, max_epochs=200, batch_size=64, val_ratio=0.2, lr=1e-3, patience=12, device=device)
- 
-         dummy_input = torch.randn(1, 1, input_size)
-         lstm_path = os.path.join(model_dir, "lstm_model.onnx")
-@@ -1069,7 +1077,8 @@
-                     gnn_scores = self.gnn_model(graph_data.x, graph_data.edge_index).squeeze().numpy()
-                     for i in range(num_candidates):
-                         set_global_seed(400 + i)
--                        numbers = np.argsort(gnn_scores)[-7:] + 1
-+                        probs_idx = softmax_no_replace(gnn_scores, k=7, tau=0.9)
-+                        numbers = np.sort(probs_idx + 1)
-                         append_prediction(sorted([int(n) for sub in numbers for n in (sub if isinstance(sub, (list, np.ndarray)) else [sub])]), base_confidence=0.83)
- 
-             if self.bnn_model:
-@@ -1110,9 +1119,9 @@
-             confidence_scores = [pred[1] for pred in all_predictions]
- 
-             # === ここで外だしした関数を呼ぶだけ ===
--            numbers_only = _stable_diverse_selection(
-+            numbers_only = stable_diverse_selection_balanced(
-                 numbers_only, confidence_scores, latest_data,
--                k=30, lambda_div=0.6, temperature=0.35
-+                k=30, lambda_div=0.6, beta_cov=0.35, cap_factor=1.5
-             )
-             confidence_scores = confidence_scores[:len(numbers_only)]
- 
-@@ -1127,9 +1136,9 @@
++++ lottery_prediction_improved_fallback.py
+@@ -1123,7 +1123,12 @@
+         except Exception as e:
+             print(f"[ERROR] 予測中にエラー発生: {e}")
+             traceback.print_exc()
+-            return numbers_only, confidence_scores
++            if not numbers_only:
++        import numpy as np
++        fallback = sorted(np.random.choice(np.arange(1, 38), size=7, replace=False).tolist())
++        numbers_only = [fallback]
++        confidence_scores = [0.1]
++    return numbers_only, confidence_scores
              
  
          try:
--            numbers_only = _stable_diverse_selection(
-+            numbers_only = stable_diverse_selection_balanced(
-                 numbers_only, confidence_scores, latest_data,
--                k=30, lambda_div=0.6, temperature=0.35
-+                k=30, lambda_div=0.6, beta_cov=0.35, cap_factor=1.5
-             )
-             confidence_scores = confidence_scores[:len(numbers_only)]
- 
+@@ -1140,12 +1145,22 @@
+         except Exception as e:
+             print(f"[ERROR] 予測中にエラー発生: {e}")
+             traceback.print_exc()
+-            return numbers_only, confidence_scores
++            if not numbers_only:
++        import numpy as np
++        fallback = sorted(np.random.choice(np.arange(1, 38), size=7, replace=False).tolist())
++        numbers_only = [fallback]
++        confidence_scores = [0.1]
++    return numbers_only, confidence_scores
+         
+         # --- Ensure tuple return even on success paths ---
+         try:
+             if 'numbers_only' in locals() and 'confidence_scores' in locals():
+-                return numbers_only, confidence_scores
++                if not numbers_only:
++        import numpy as np
++        fallback = sorted(np.random.choice(np.arange(1, 38), size=7, replace=False).tolist())
++        numbers_only = [fallback]
++        confidence_scores = [0.1]
++    return numbers_only, confidence_scores
+             elif 'all_predictions' in locals() and all_predictions:
+                 _nums, _confs = [], []
+                 for _p in all_predictions:
