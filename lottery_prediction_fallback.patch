@@ -1,0 +1,41 @@
+--- lottery_prediction.py
++++ lottery_prediction_improved_fallback.py
+@@ -1123,7 +1123,12 @@
+         except Exception as e:
+             print(f"[ERROR] 予測中にエラー発生: {e}")
+             traceback.print_exc()
+-            return numbers_only, confidence_scores
++            if not numbers_only:
++        import numpy as np
++        fallback = sorted(np.random.choice(np.arange(1, 38), size=7, replace=False).tolist())
++        numbers_only = [fallback]
++        confidence_scores = [0.1]
++    return numbers_only, confidence_scores
+             
+ 
+         try:
+@@ -1140,12 +1145,22 @@
+         except Exception as e:
+             print(f"[ERROR] 予測中にエラー発生: {e}")
+             traceback.print_exc()
+-            return numbers_only, confidence_scores
++            if not numbers_only:
++        import numpy as np
++        fallback = sorted(np.random.choice(np.arange(1, 38), size=7, replace=False).tolist())
++        numbers_only = [fallback]
++        confidence_scores = [0.1]
++    return numbers_only, confidence_scores
+         
+         # --- Ensure tuple return even on success paths ---
+         try:
+             if 'numbers_only' in locals() and 'confidence_scores' in locals():
+-                return numbers_only, confidence_scores
++                if not numbers_only:
++        import numpy as np
++        fallback = sorted(np.random.choice(np.arange(1, 38), size=7, replace=False).tolist())
++        numbers_only = [fallback]
++        confidence_scores = [0.1]
++    return numbers_only, confidence_scores
+             elif 'all_predictions' in locals() and all_predictions:
+                 _nums, _confs = [], []
+                 for _p in all_predictions:
