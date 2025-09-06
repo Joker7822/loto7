@@ -1145,7 +1145,7 @@ class LotoPredictor:
         except Exception as e:
             print(f"[ERROR] 予測中にエラー発生: {e}")
             traceback.print_exc()
-            if not numbers_only:
+    if not numbers_only:
         import numpy as np
         fallback = sorted(np.random.choice(np.arange(1, 38), size=7, replace=False).tolist())
         numbers_only = [fallback]
